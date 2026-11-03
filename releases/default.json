@@ -1,0 +1,8 @@
+{
+  "version": "objy-eb221e0",
+  "commit": "eb221e0826dce0359c16558389abafd155006505",
+  "url": "https://codeload.github.com/spoo-technologies/objy-db/tar.gz/eb221e0826dce0359c16558389abafd155006505",
+  "sha256": "ff445175a99d29c139e6605e2afe14955e0e33e90f91a37e782b9cea7f2e8c0b",
+  "entrypoint": "src/index.js",
+  "nodeMajor": 22
+}

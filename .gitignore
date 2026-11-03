@@ -1,0 +1,10 @@
+node_modules/
+*.tgz
+.env
+.env.*
+.objy/
+coverage/
+.DS_Store
+*.tfstate*
+.terraform/
+*.tfvars*
