@@ -5,16 +5,17 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createManager } from './manager.js';
 import { doctor, targetId, targetName } from './doctor.js';
 import { runWizard } from './deployment/wizard.js';
+import { withCredentials } from './deployment/input.js';
 
 const optionTypes = {
   help: 'boolean', version: 'boolean', json: 'boolean', yes: 'boolean', follow: 'boolean',
   home: 'string', config: 'string', name: 'string', size: 'string', region: 'string', protocol: 'string', domain: 'string',
   shards: 'string', replicas: 'string', memory: 'string', storage: 'string', 's3-endpoint': 'string', 's3-region': 'string', 's3-bucket': 'string',
-  'release-manifest': 'string', node: 'string', lines: 'string',
+  'release-manifest': 'string', node: 'string', lines: 'string', port: 'string', 'no-open': 'boolean',
 };
 const shorts = { help: 'h', version: 'v', yes: 'y', follow: 'f' };
 const deployOptions = ['config', 'name', 'size', 'region', 'protocol', 'domain', 'shards', 'replicas', 'memory', 'storage', 's3-endpoint', 's3-region', 's3-bucket', 'release-manifest', 'yes'];
-const allowed = { deploy: deployOptions, logs: ['follow', 'node', 'lines'], doctor: ['protocol'], start: [], stop: [], restart: [], resume: [], list: [], status: [], help: [], version: [] };
+const allowed = { ui: ['port', 'no-open'], deploy: deployOptions, logs: ['follow', 'node', 'lines'], doctor: ['protocol'], start: [], stop: [], restart: [], resume: [], list: [], status: [], help: [], version: [] };
 
 export function parseCommand(argv) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, strict: true,
@@ -26,7 +27,7 @@ export function parseCommand(argv) {
     if (['help', 'version', 'home', 'json'].includes(name)) continue;
     if (!allowed[command]?.includes(name)) throw new Error(`--${name} is not valid for ${command || 'the menu'}`);
   }
-  if (subject && ['list', 'help', 'version'].includes(command)) throw new Error(`${command} does not take a deployment name`);
+  if (subject && ['list', 'help', 'version', 'ui'].includes(command)) throw new Error(`${command} does not take a deployment name`);
   return { command, subject, options: values };
 }
 
@@ -49,6 +50,12 @@ export async function main(argv = process.argv.slice(2), { input = process.stdin
     if (!command && options.json) throw new Error('Specify a command with --json, for example objy list --json.');
     if (!command && (!input.isTTY || !output.isTTY)) { output.write(help); return 0; }
     const manager = managerFactory({ root: options.home, environment });
+    if (command === 'ui') {
+      const { startUi } = await import('./ui/server.js');
+      const ui = await startUi({ manager, environment, port: options.port === undefined ? 7340 : Number(options.port), openBrowser: !options['no-open'] });
+      output.write(options.json ? JSON.stringify({ url: ui.url }) + '\n' : `\nObjy is open at ${ui.url}\nPress Ctrl+C to close the UI.\n`);
+      return 0;
+    }
     const interactive = input.isTTY && output.isTTY && !options.json;
     const ask = async (prompt, choices) => {
       if (!interactive) throw new Error('Specify a deployment name. Run objy list --json to see saved deployments.');
@@ -101,13 +108,7 @@ export async function main(argv = process.argv.slice(2), { input = process.stdin
       if (['shards', 'replicas', 'memory'].some(key => options[key] !== undefined) && values.preset !== 'custom') throw new Error('Use --size custom with --shards, --replicas or --memory.');
       if (subject) values.target = subject;
       if (values.target) values.target = targetId(values.target);
-      for (const [field, candidates] of Object.entries({
-        cloudToken: ['HCLOUD_TOKEN'], adminPassword: ['OBJY_ADMIN_PASSWORD'],
-        accessKey: ['OBJY_S3_ACCESS_KEY', 'TF_VAR_s3_access_key'], secretKey: ['OBJY_S3_SECRET_KEY', 'TF_VAR_s3_secret_key'],
-      })) if (values[field] === undefined) {
-        const value = candidates.map(key => environment[key]).find(value => value !== undefined);
-        if (value !== undefined) values[field] = value;
-      }
+      values = withCredentials(values, environment);
       if (interactive && !options.yes) {
         values = await runWizard({ input, output, initial: values });
         if (!values) { output.write('Cancelled.\n'); return 0; }
@@ -197,6 +198,7 @@ objy — deploy and manage your clusters
   objy logs [name] [-f]        Read or follow logs
   objy resume [name]           Continue interrupted work
   objy doctor [target]         Check dependencies
+  objy ui                      Open the local browser UI
 
 Targets: local, docker, vm, hetzner
 Sizes:   tiny, small, medium, large, custom
@@ -209,6 +211,7 @@ Custom: --shards, --replicas, --memory <MiB>
 Storage: --storage, --s3-endpoint, --s3-region, --s3-bucket
 Advanced: --config <json>, --release-manifest <json>, --yes
 Logs: --node <id>, --lines <count>, --follow
+UI: --port <number>, --no-open
 Global: --home <directory>, --json, --help, --version
 
 Credentials: OBJY_ADMIN_PASSWORD, HCLOUD_TOKEN,

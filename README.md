@@ -9,6 +9,15 @@ node bin/objy.js
 
 Requires Node.js 22+. This is an early implementation; the npm package is not published yet. Once installed, the command is `objy`.
 
+## Browser UI
+
+```sh
+node bin/objy.js ui
+# Once installed: objy ui
+```
+
+Opens a small local dashboard with guided deployment, topology, logs and cluster controls. It shares the CLI's state and credentials. Use `--port 7341` to change the port or `--no-open` to skip opening the browser. The UI listens only on this computer; keep the command running while using it.
+
 ## Deploy
 
 ```sh
@@ -107,6 +116,6 @@ npm test
 npm run test:smoke
 ```
 
-The exported `createManager()` API owns deployment, state and lifecycle operations. A future UI can call it directly and subscribe to progress callbacks. No UI or server code is bundled.
+The terminal and browser UI use the same exported `createManager()` API. The UI is one HTML file served by Node.js, with no additional dependencies. Database server code is downloaded separately.
 
 Cloud and VM operations need live qualification before production use. Resizing, upgrades, deletion, importing existing deployments and migrating the server's current `objy` command are outside this first increment.

@@ -1,0 +1,113 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { get } from 'node:http';
+import { startUi } from '../src/ui/server.js';
+import { parseCommand } from '../src/cli.js';
+
+const answers = { target: 'docker', name: 'demo', preset: 'tiny', adminPassword: 'test-password-123' };
+
+async function fixture(t, options = {}) {
+  const calls = [];
+  const record = { name: 'demo', target: 'docker', phase: 'ready', state: 'ready', topology: { nodes: [], endpoint: 'http://127.0.0.1:8080' } };
+  const manager = {
+    list: async () => [record], status: async name => { calls.push(['status', name]); return record; },
+    logs: async (name, options) => { calls.push(['logs', name, options]); return 'ready\n'; },
+    deploy: async (values, options) => { calls.push(['deploy', values, options.releaseFile]); options.onEvent({ message: 'Starting nodes' }); return record; },
+    act: async (name, action) => { calls.push([action, name]); }, resume: async name => { calls.push(['resume', name]); },
+    ...options.manager,
+  };
+  const ui = await startUi({ environment: {}, openBrowser: false, port: 0, ...options, manager,
+    doctorImpl: async (target, options) => { calls.push(['doctor', target, options.protocol]); return { ok: true, checks: [] }; },
+  });
+  t.after(async () => { await ui.settled(); await ui.close(); });
+  const page = await fetch(ui.url);
+  const html = await page.text();
+  const token = html.match(/name="objy-token" content="([a-f0-9]+)"/)[1];
+  const request = (path, body, headers = {}) => fetch(ui.url + path, { method: body === undefined ? 'GET' : 'POST',
+    headers: { 'x-objy-token': token, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return { ui, request, calls, page, html, token };
+}
+
+test('UI is local-only and rejects unauthenticated or cross-origin commands', async t => {
+  await assert.rejects(startUi({ host: '0.0.0.0' }), /127.0.0.1/);
+  const { ui, request, calls, html, page } = await fixture(t);
+  assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  assert.match(page.headers.get('content-security-policy'), /connect-src 'self'/);
+  assert.ok(!html.includes('__TOKEN__') && !html.includes('__NONCE__'));
+  assert.equal((await fetch(ui.url + '/api/clusters')).status, 403);
+  const wrongHost = await new Promise((resolve, reject) => get(ui.url, { headers: { host: 'unrelated.example' } }, response => { response.resume(); resolve(response.statusCode); }).on('error', reject));
+  assert.equal(wrongHost, 403);
+  for (const headers of [{ origin: 'https://unrelated.example' }, { 'sec-fetch-site': 'cross-site' }, { 'x-objy-token': 'wrong' }]) {
+    assert.equal((await request('/api/deploy', { answers }, headers)).status, 403, JSON.stringify(headers));
+  }
+  assert.equal(calls.length, 0);
+  assert.equal((await request('/api/missing')).status, 404);
+  assert.match(await (await fetch(ui.url + '/catalog.js')).text(), /export function wizardFields/);
+});
+
+test('browser reads topology, logs and dependency checks through the shared services', async t => {
+  const { request, calls } = await fixture(t);
+  assert.equal((await (await request('/api/clusters')).json())[0].name, 'demo');
+  assert.equal((await (await request('/api/clusters/demo')).json()).state, 'ready');
+  assert.deepEqual(await (await request('/api/clusters/demo/logs?node=first&lines=42')).json(), { logs: 'ready\n' });
+  assert.equal((await request('/api/doctor', { target: 'hetzner', protocol: 'https' })).status, 200);
+  assert.deepEqual(calls, [['status', 'demo'], ['logs', 'demo', { node: 'first', tail: 42 }], ['doctor', 'hetzner', 'https']]);
+});
+
+test('deployment uses environment credentials without sending them to the browser', async t => {
+  const password = 'env-password-456';
+  let received;
+  const { request, ui, html } = await fixture(t, { environment: { OBJY_ADMIN_PASSWORD: password }, manager: {
+    deploy: async (values, { onEvent }) => { received = values; onEvent({ message: `Connecting with ${password}` }); },
+  } });
+  assert.deepEqual(await (await request('/api/session')).json(), { providedCredentials: ['adminPassword'] });
+  assert.ok(!html.includes(password));
+  const response = await request('/api/deploy', { answers: { ...answers, adminPassword: '' } });
+  assert.equal(response.status, 202);
+  await ui.settled();
+  assert.equal(received.adminPassword, password);
+  assert.equal(received.storage, 'docker-minio');
+  const jobs = await (await request('/api/jobs')).json();
+  assert.equal(jobs[0].status, 'complete');
+  assert.ok(!JSON.stringify(jobs).includes(password));
+});
+
+test('background jobs reject conflicting actions and expose redacted failures', async t => {
+  let finish;
+  const blocked = new Promise(resolve => { finish = resolve; });
+  const { request, ui } = await fixture(t, { manager: {
+    deploy: async (values, { onEvent }) => { onEvent({ message: 'Waiting' }); await blocked; throw new Error(`Failed using ${values.adminPassword}`); },
+  } });
+  try {
+    assert.equal((await request('/api/deploy', { answers })).status, 202);
+    assert.equal((await request('/api/clusters/demo/actions', { action: 'stop' })).status, 409);
+  } finally { finish(); }
+  await ui.settled();
+  const jobs = await (await request('/api/jobs')).json();
+  assert.equal(jobs[0].status, 'failed');
+  assert.ok(!JSON.stringify(jobs).includes(answers.adminPassword));
+  assert.equal((await request('/api/clusters/demo/actions', { action: 'resume' })).status, 202);
+});
+
+test('invalid wizard submissions cannot start an operation; lifecycle actions use the manager', async t => {
+  const { request, calls, ui } = await fixture(t);
+  for (const body of [{}, { answers: { ...answers, name: '../escape' } }, { answers: { ...answers, adminPassword: 'short' } }, { answers: { ...answers, preset: 'custom', shards: 32, replicas: 3 } }]) {
+    assert.equal((await request('/api/deploy', body)).status, 400);
+  }
+  assert.equal((await request('/api/clusters/demo/actions', { action: 'destroy' })).status, 400);
+  assert.equal(calls.length, 0);
+  for (const action of ['start', 'stop', 'restart', 'resume']) {
+    assert.equal((await request('/api/clusters/demo/actions', { action })).status, 202);
+    await ui.settled();
+  }
+  assert.deepEqual(calls, [['start', 'demo'], ['stop', 'demo'], ['restart', 'demo'], ['resume', 'demo']]);
+});
+
+test('UI command accepts its own flags and rejects a deployment name', () => {
+  const { command, options } = parseCommand(['ui', '--port', '7341', '--no-open']);
+  assert.equal(command, 'ui'); assert.equal(options.port, '7341'); assert.equal(options['no-open'], true);
+  assert.throws(() => parseCommand(['ui', 'demo']), /does not take/);
+  assert.throws(() => parseCommand(['ui', '--yes']), /not valid/);
+});

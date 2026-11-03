@@ -9,6 +9,11 @@ async function check(directory) {
     else if (path.endsWith('.js')) {
       const result = spawnSync(process.execPath, ['--check', path], { stdio: 'inherit' });
       if (result.status) process.exit(result.status);
+    } else if (path.endsWith('.html')) {
+      for (const [, script] of (await readFile(path, 'utf8')).matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) {
+        const result = spawnSync(process.execPath, ['--check', '--input-type=module'], { input: script, encoding: 'utf8' });
+        if (result.status) { console.error(`${path}: ${result.stderr}`); process.exit(result.status); }
+      }
     }
   }
 }
