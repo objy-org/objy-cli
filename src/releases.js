@@ -10,7 +10,7 @@ import { snapshotServer, verifyServerSnapshot } from './deployment/server-bundle
 
 const maxBytes = 128 * 1024 * 1024;
 const repository = 'objy-org/objy';
-const releaseFiles = new Set(['src', 'bin', 'public', 'client', 'plugins', 'package.json', 'package-lock.json', 'LICENSE', 'API.md']);
+const releaseFiles = new Set(['src', 'public', 'client', 'plugins', 'package.json', 'package-lock.json', 'LICENSE', 'API.md']);
 
 export function validateRelease(value) {
   if (!value || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(value.version || '')

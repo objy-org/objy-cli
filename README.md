@@ -3,17 +3,16 @@
 One CLI for your Objy clusters. Deploy locally, with Docker, onto existing VMs, or to Hetzner using Terraform.
 
 ```sh
-npm ci
-node bin/objy.js
+npm install --global @objy/cli@alpha
+objy --help
 ```
 
-Requires Node.js 22+. This is an early implementation; the npm package is not published yet. Once installed, the command is `objy`.
+Requires Node.js 22+. The command is `objy` on every supported platform.
 
 ## Browser UI
 
 ```sh
-node bin/objy.js ui
-# Once installed: objy ui
+objy ui
 ```
 
 Opens a small local dashboard with guided deployment, topology, logs and cluster controls. It shares the CLI's state and credentials. Use `--port 7341` to change the port or `--no-open` to skip opening the browser. The UI listens only on this computer; keep the command running while using it.
