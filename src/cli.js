@@ -11,10 +11,10 @@ const optionTypes = {
   help: 'boolean', version: 'boolean', json: 'boolean', yes: 'boolean', follow: 'boolean',
   home: 'string', config: 'string', name: 'string', size: 'string', region: 'string', protocol: 'string', domain: 'string',
   shards: 'string', replicas: 'string', memory: 'string', storage: 'string', 's3-endpoint': 'string', 's3-region': 'string', 's3-bucket': 'string',
-  'release-manifest': 'string', node: 'string', lines: 'string', port: 'string', 'no-open': 'boolean',
+  node: 'string', lines: 'string', port: 'string', 'no-open': 'boolean',
 };
 const shorts = { help: 'h', version: 'v', yes: 'y', follow: 'f' };
-const deployOptions = ['config', 'name', 'size', 'region', 'protocol', 'domain', 'shards', 'replicas', 'memory', 'storage', 's3-endpoint', 's3-region', 's3-bucket', 'release-manifest', 'yes'];
+const deployOptions = ['config', 'name', 'size', 'region', 'protocol', 'domain', 'shards', 'replicas', 'memory', 'storage', 's3-endpoint', 's3-region', 's3-bucket', 'yes'];
 const allowed = { ui: ['port', 'no-open'], deploy: deployOptions, logs: ['follow', 'node', 'lines'], doctor: ['protocol'], start: [], stop: [], restart: [], resume: [], list: [], status: [], help: [], version: [] };
 
 export function parseCommand(argv) {
@@ -116,7 +116,7 @@ export async function main(argv = process.argv.slice(2), { input = process.stdin
         if (!options.yes) throw new Error('Noninteractive deployment requires --yes and all required settings. Run objy deploy in a terminal for guided setup.');
         if (!values.target || !values.name || !values.preset) throw new Error('Specify the target, --name and --size (tiny, small, medium, large or custom).');
       }
-      result = await manager.deploy(values, { releaseFile: options['release-manifest'], onEvent: emit });
+      result = await manager.deploy(values, { onEvent: emit });
     } else if (command === 'doctor') {
       subject ||= interactive ? await ask('Check setup for', ['local', 'docker', 'vm', 'hetzner'].map(value => ({ value, label: value }))) : 'local';
       result = await doctorImpl(subject, { environment, protocol: options.protocol });
@@ -209,7 +209,7 @@ Sizes:   tiny, small, medium, large, custom
 Deploy: --name, --size, --region, --protocol http|https, --domain
 Custom: --shards, --replicas, --memory <MiB>
 Storage: --storage auto|external-s3, --s3-endpoint, --s3-region, --s3-bucket
-Advanced: --config <json>, --release-manifest <json>, --yes
+Advanced: --config <json>, --yes
 Logs: --node <id>, --lines <count>, --follow
 UI: --port <number>, --no-open
 Global: --home <directory>, --json, --help, --version

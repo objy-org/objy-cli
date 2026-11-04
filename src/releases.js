@@ -1,13 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
+import { setTimeout as delay } from 'node:timers/promises';
 import { runProcess } from './core/process.js';
 import { readJson, writeJson } from './deployment/files.js';
 import { withLock } from './deployment/operations.js';
 import { snapshotServer, verifyServerSnapshot } from './deployment/server-bundle.js';
 
 const maxBytes = 128 * 1024 * 1024;
+const repository = 'objy-org/objy';
 const releaseFiles = new Set(['src', 'bin', 'public', 'client', 'plugins', 'package.json', 'package-lock.json', 'LICENSE', 'API.md']);
 
 export function validateRelease(value) {
@@ -19,8 +21,53 @@ export function validateRelease(value) {
   return { version: value.version, url: url.href, sha256: value.sha256, entrypoint: value.entrypoint, nodeMajor: value.nodeMajor };
 }
 
-export async function readRelease(path) {
-  return validateRelease(await readJson(path ? resolve(path) : new URL('../releases/default.json', import.meta.url)));
+async function latestSource(fetchImpl) {
+  const api = path => fetchImpl(`https://api.github.com/repos/${repository}/${path}`, {
+    headers: { accept: 'application/vnd.github+json', 'user-agent': 'objy-cli' }, signal: AbortSignal.timeout(30000),
+  });
+  let response = await api('releases/latest'), release;
+  if (response.status === 404) {
+    response = await api('releases?per_page=100');
+    if (!response.ok) throw new Error(`Cannot find the latest server release (HTTP ${response.status}). Try deploying again later.`);
+    const releases = await response.json();
+    if (!Array.isArray(releases)) throw new Error('Invalid server release response');
+    const published = releases.filter(item => !item.draft && item.published_at).sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));
+    release = published.find(item => !item.prerelease) || published[0];
+  } else {
+    if (!response.ok) throw new Error(`Cannot find the latest server release (HTTP ${response.status}). Try deploying again later.`);
+    release = await response.json();
+  }
+  if (!release || release.draft || typeof release.tag_name !== 'string' || !release.tag_name) throw new Error('No published Objy server release is available yet.');
+  response = await api(`commits/${encodeURIComponent(release.tag_name)}`);
+  if (!response.ok) throw new Error(`Cannot resolve the latest server release (HTTP ${response.status}). Try deploying again later.`);
+  const { sha } = await response.json();
+  if (!/^[a-f0-9]{40}$/.test(sha || '')) throw new Error('Invalid server release commit');
+  return { commit: sha, version: release.tag_name, url: `https://codeload.github.com/${repository}/tar.gz/${sha}`, entrypoint: 'src/index.js', nodeMajor: 22 };
+}
+
+async function downloadRelease(fetchImpl, url) {
+  const response = await fetchImpl(url, { signal: AbortSignal.timeout(120000), redirect: 'follow' });
+  if (!response.ok) throw new Error(`Server download failed (HTTP ${response.status})`);
+  if (response.url && !response.url.startsWith('https:')) throw new Error('Release download redirected away from HTTPS');
+  const chunks = []; let size = 0;
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    if (size > maxBytes) throw new Error('Server archive exceeds the download limit');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function withReleaseLock(path, operation) {
+  const deadline = Date.now() + 180000;
+  while (true) {
+    let acquired = false;
+    try { return await withLock(path, () => { acquired = true; return operation(); }); }
+    catch (error) {
+      if (acquired || error.statusCode !== 409 || Date.now() >= deadline) throw error;
+      await delay(100);
+    }
+  }
 }
 
 // Extract only regular release files. No shell, links, device entries or path traversal.
@@ -65,26 +112,35 @@ export async function extractRelease(archive, destination) {
 }
 
 export function createReleaseStore({ root, fetchImpl = fetch, run = runProcess } = {}) {
-  return {
-    async ensure(manifest, { install = false, emit = () => {} } = {}) {
+  const store = {
+    async latest({ emit = () => {} } = {}) {
+      emit('Finding the latest Objy server release');
+      const source = await latestSource(fetchImpl);
+      const path = join(root, 'release-refs', `${source.commit}.json`);
+      return withReleaseLock(`${path}.lock`, async () => {
+        const cached = await readJson(path, null);
+        if (cached && cached.url === source.url) {
+          const release = validateRelease({ ...cached, version: source.version });
+          await store.ensure(release, { emit });
+          return release;
+        }
+        emit(`Downloading Objy Server ${source.version}`);
+        const archive = await downloadRelease(fetchImpl, source.url);
+        const release = validateRelease({ ...source, sha256: createHash('sha256').update(archive).digest('hex') });
+        await store.ensure(release, { emit, archive });
+        await writeJson(path, release);
+        return release;
+      });
+    },
+    async ensure(manifest, { install = false, emit = () => {}, archive } = {}) {
       const release = validateRelease(manifest);
       if (install && Number(process.versions.node.split('.')[0]) < release.nodeMajor) throw new Error(`This server release requires Node.js ${release.nodeMajor}+. https://nodejs.org/en/download`);
       const directory = join(root, 'releases', release.sha256);
-      await withLock(`${directory}.lock`, async () => {
+      await withReleaseLock(`${directory}.lock`, async () => {
         const existing = await readJson(join(directory, 'release.json'), null);
         if (!existing) {
-          emit(`Downloading Objy Server ${release.version}`);
-          const response = await fetchImpl(release.url, { signal: AbortSignal.timeout(120000), redirect: 'follow' });
-          if (!response.ok) throw new Error(`Server download failed (HTTP ${response.status})`);
-          if (response.url && !response.url.startsWith('https:')) throw new Error('Release download redirected away from HTTPS');
-          const chunks = [];
-          let size = 0;
-          for await (const chunk of response.body) {
-            size += chunk.length;
-            if (size > maxBytes) throw new Error('Server archive exceeds the download limit');
-            chunks.push(chunk);
-          }
-          const bytes = Buffer.concat(chunks);
+          if (!archive) emit(`Downloading Objy Server ${release.version}`);
+          const bytes = archive || await downloadRelease(fetchImpl, release.url);
           if (createHash('sha256').update(bytes).digest('hex') !== release.sha256) throw new Error('Server checksum mismatch. Nothing was installed.');
           const stage = `${directory}.${randomUUID()}.tmp`;
           const source = `${stage}.source`;
@@ -114,4 +170,5 @@ export function createReleaseStore({ root, fetchImpl = fetch, run = runProcess }
       return directory;
     },
   };
+  return store;
 }

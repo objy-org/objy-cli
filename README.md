@@ -79,21 +79,9 @@ Terraform remains external. Missing tools produce an installation link before de
 
 ## Server releases
 
-The CLI does **not** contain or depend on `@objy/server` or the Objy database library. It downloads a pinned release, verifies its SHA-256, and caches it separately. Local server dependencies are installed inside that cache. Docker currently builds an image from the verified release; VMs receive the release over SSH.
+New deployments automatically use the latest published [Objy server release](https://github.com/objy-org/objy/releases). Stable releases are preferred; until one exists, the newest prerelease is used. No version selection or manifest is needed.
 
-The initial default matches the Terraform presets: commit `eb221e0`. Updating the CLI does not update existing deployments. An advanced `--release-manifest file.json` option accepts a pinned source archive:
-
-```json
-{
-  "version": "my-release",
-  "url": "https://example.com/server-source.tar.gz",
-  "sha256": "<64-character-sha256>",
-  "entrypoint": "src/index.js",
-  "nodeMajor": 22
-}
-```
-
-The archive must contain one root directory with `src/index.js`, `package.json` and `package-lock.json`. Server dependencies must support installation without npm lifecycle scripts.
+The CLI downloads the server separately, saves its exact commit and checksum, and reuses that version for restarts and resumes. Existing clusters never upgrade implicitly. The server and database library are not CLI dependencies.
 
 ## Scripts and state
 

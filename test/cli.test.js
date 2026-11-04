@@ -42,6 +42,7 @@ test('no run command, unknown flags and excess arguments are rejected', () => {
   assert.throws(() => parseCommand(['stop', 'demo', '--size', 'tiny']), /not valid/);
   assert.throws(() => parseCommand(['start', 'demo', 'oops']), /Too many/);
   assert.throws(() => parseCommand(['deploy', '--typo']), /Unknown option/);
+  assert.throws(() => parseCommand(['deploy', '--release-manifest', 'custom.json']), /Unknown option/);
 });
 
 test('noninteractive deployment requires explicit confirmation and size; JSON is machine-readable', async () => {

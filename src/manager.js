@@ -7,13 +7,14 @@ import { cliHome } from './deployment/state.js';
 import { readJson, writeJson, redact } from './deployment/files.js';
 import { withLock, lockActive } from './deployment/operations.js';
 import { normalizeAnswers } from './deployment/catalog.js';
-import { createReleaseStore, readRelease } from './releases.js';
+import { createReleaseStore } from './releases.js';
 import { requireDependencies, targetId, targetName } from './doctor.js';
 import { createSshTransport } from './drivers/vm/ssh-transport.js';
 
-export function createManager({ environment = process.env, root = cliHome(environment), adapters, setup, check = requireDependencies, timeoutMs = 600000 } = {}) {
+export function createManager({ environment = process.env, root = cliHome(environment), adapters, setup, check = requireDependencies, resolveLatestRelease, timeoutMs = 600000 } = {}) {
   root = resolve(root);
   const releases = createReleaseStore({ root });
+  resolveLatestRelease ||= options => releases.latest(options);
   adapters ||= createAdapters({ environment, transport: createSshTransport({ knownHostsDirectory: join(root, 'ssh', 'known-hosts') }),
     resolveRelease: (record, emit) => releases.ensure(record.release, { install: record.settings.target === 'node-process', emit }) });
   setup ||= createSetupService({ root, adapters, timeoutMs });
@@ -107,10 +108,11 @@ export function createManager({ environment = process.env, root = cliHome(enviro
   return {
     root,
     async list() { return Promise.all((await setup.list()).map(output)); },
-    async deploy(input, { releaseFile, onEvent = () => {} } = {}) {
+    async deploy(input, { onEvent = () => {} } = {}) {
       const values = normalizeAnswers({ ...input, target: targetId(input.target) });
-      const release = await readRelease(releaseFile);
       await check(values.target, { environment, protocol: values.protocol, storage: values.storage });
+      if ((await setup.list()).some(record => record.name === values.name)) throw new Error(`Deployment ${values.name} already exists. Use status, start or resume.`);
+      const release = await resolveLatestRelease({ emit: message => { try { onEvent({ message }); } catch {} } });
       const record = await withLock(join(root, 'names.lock'), async () => {
         if ((await setup.list()).some(record => record.name === values.name)) throw new Error(`Deployment ${values.name} already exists. Use status, start or resume.`);
         return setup.create(values, randomUUID(), release);

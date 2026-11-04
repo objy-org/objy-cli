@@ -12,7 +12,7 @@ async function fixture(t, options = {}) {
   const manager = {
     list: async () => [record], status: async name => { calls.push(['status', name]); return record; },
     logs: async (name, options) => { calls.push(['logs', name, options]); return 'ready\n'; },
-    deploy: async (values, options) => { calls.push(['deploy', values, options.releaseFile]); options.onEvent({ message: 'Starting nodes' }); return record; },
+    deploy: async (values, options) => { calls.push(['deploy', values]); options.onEvent({ message: 'Starting nodes' }); return record; },
     act: async (name, action) => { calls.push([action, name]); }, resume: async name => { calls.push(['resume', name]); },
     ...options.manager,
   };
@@ -36,6 +36,7 @@ test('UI is local-only and rejects unauthenticated or cross-origin commands', as
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.match(page.headers.get('content-security-policy'), /connect-src 'self'/);
   assert.ok(!html.includes('__TOKEN__') && !html.includes('__NONCE__'));
+  assert.ok(!html.includes('release-file') && !html.includes('Server release manifest'));
   assert.equal((await fetch(ui.url + '/api/clusters')).status, 403);
   const wrongHost = await new Promise((resolve, reject) => get(ui.url, { headers: { host: 'unrelated.example' } }, response => { response.resume(); resolve(response.statusCode); }).on('error', reject));
   assert.equal(wrongHost, 403);

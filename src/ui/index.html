@@ -59,7 +59,7 @@
     let view = 'clusters', selected = null, tab = 'topology', clusters = [], jobs = [], detail = null;
     let provided = [], timer, refreshing = false, detailAt = 0, logAt = 0, logNode = '', logs = '', follow = false;
     let checkTarget = 'docker', checkProtocol = 'http', checkResult = null, checking = false;
-    let step = 0, answers = {}, releaseFile = '', submitting = false, pendingAction = null, toastTimer;
+    let step = 0, answers = {}, submitting = false, pendingAction = null, toastTimer;
     const paths = {
       cpu: '<rect x="5" y="5" width="14" height="14" rx="3"/><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4"/><rect x="9" y="9" width="6" height="6" rx="1"/>',
       plus: '<path d="M12 5v14M5 12h14"/>', arrow: '<path d="m9 5 7 7-7 7"/>',
@@ -155,10 +155,10 @@
       return '<div class="heading"><div><div class="eyebrow">Before you deploy</div><h1>Ready when you are.</h1><p>Check the tools your chosen platform needs.</p></div></div><section class="panel checks"><div class="check-toolbar"><select id="check-target" aria-label="Deployment platform">' + ['docker','local','vm','hetzner'].map(t => '<option value="' + t + '"' + (t === checkTarget ? ' selected' : '') + '>' + esc(label(t)) + '</option>').join('') + '</select><select id="check-protocol" aria-label="Connection protocol"><option value="http"' + (checkProtocol === 'http' ? ' selected' : '') + '>HTTP</option><option value="https"' + (checkProtocol === 'https' ? ' selected' : '') + '>HTTPS</option></select><button class="button primary" data-check' + (checking ? ' disabled' : '') + '>' + (checking ? 'Checking…' : 'Check setup') + '</button></div><div class="check-results">' + (checkResult ? checkResult.checks.map(c => '<div class="check-row"><span class="check-symbol ' + (c.ok ? '' : 'bad') + '">' + (c.ok ? '✓' : '○') + '</span><div><strong>' + esc(c.name) + '</strong><p>' + esc(c.ok ? 'Ready' : c.detail) + '</p>' + (!c.ok && urlSafe(c.install) ? '<a href="' + esc(urlSafe(c.install)) + '" target="_blank" rel="noopener noreferrer">Installation guide ↗</a>' : '') + '</div></div>').join('') : '<p class="checks-empty">Choose a platform to see what’s ready and what needs installing.</p>') + '</div></section>';
     }
     function openWizard() {
-      answers = { target: 'docker', preset: 'tiny', protocol: 'http' }; step = 0; releaseFile = ''; submitting = false;
+      answers = { target: 'docker', preset: 'tiny', protocol: 'http' }; step = 0; submitting = false;
       renderWizard(); $('#wizard').showModal(); $('#wizard-fields input')?.focus();
     }
-    function closeWizard() { if (submitting) return; $('#wizard').close(); answers = {}; releaseFile = ''; $('#wizard-fields').replaceChildren(); }
+    function closeWizard() { if (submitting) return; $('#wizard').close(); answers = {}; $('#wizard-fields').replaceChildren(); }
     function renderWizard() {
       const titles = ['Where should it run?', 'Choose your size.', 'Make it yours.', 'Ready to deploy?'];
       $('#wizard-subtitle').textContent = titles[step]; $('#step-count').textContent = (step + 1) + ' of 4';
@@ -172,8 +172,8 @@
         const rows = [['Name',answers.name],['Platform',label(answers.target)],['Size',(presets.find(p => p.value === answers.preset)?.label || 'Custom') + ' · ' + size.nodes + ' nodes'],['Memory per node',size.heapMb / 1024 + ' GiB'],['Connection',answers.protocol.toUpperCase() + (answers.domain ? ' · ' + answers.domain : '')]];
         if (answers.target === 'hetzner') rows.splice(2,0,['Location',answers.region || 'fsn1']);
         rows.push(['Storage', storageChoices(answers.target).find(s => s.value === answers.storage)?.label || 'Automatic']);
-        fields.innerHTML = '<div class="review">' + rows.map(([key,value]) => '<div class="review-row"><span>' + esc(key) + '</span><strong>' + esc(value) + '</strong></div>').join('') + '</div><p class="review-note">' + (answers.target === 'hetzner' ? 'This creates cloud resources in your Hetzner account. Your provider’s usage charges apply.' : 'Your cluster will be installed and started with these settings.') + '</p><details><summary>Advanced options</summary><div class="field"><label for="release-file">Server release manifest</label><input id="release-file" placeholder="Use the default pinned release"><small>Optional path to a release manifest on this computer.</small></div></details>';
-        $('#release-file').value = releaseFile; return;
+        fields.innerHTML = '<div class="review">' + rows.map(([key,value]) => '<div class="review-row"><span>' + esc(key) + '</span><strong>' + esc(value) + '</strong></div>').join('') + '</div><p class="review-note">' + (answers.target === 'hetzner' ? 'This creates cloud resources in your Hetzner account. Your provider’s usage charges apply.' : 'Your cluster will be installed and started with these settings.') + '</p>';
+        return;
       }
       let group = '';
       for (const field of wizardFields(answers, step)) {
@@ -208,7 +208,6 @@
     }
     function collectFields() {
       for (const field of $('#wizard-fields').querySelectorAll('[name]')) answers[field.name] = field.value;
-      if ($('#release-file')) releaseFile = $('#release-file').value.trim();
     }
     function validateStep() {
       collectFields();
@@ -240,7 +239,7 @@
         validateStep();
         if (step < 3) { step++; renderWizard(); $('#wizard .dialog-body').scrollTop = 0; $('#wizard-fields input, #wizard-fields button, #wizard-fields select')?.focus(); return; }
         submitting = true; $('#next-step').disabled = true; $('#next-step').textContent = 'Starting…';
-        const job = await api('/api/deploy', { answers, ...(releaseFile ? { releaseFile } : {}) });
+        const job = await api('/api/deploy', { answers });
         jobs.push(job); submitting = false; closeWizard(); notice(''); view = 'clusters'; render(); await refresh(true);
       } catch (error) { $('#wizard-error').textContent = error.message; $('#wizard-error').hidden = false; $('#wizard-error').scrollIntoView({block:'nearest'}); }
       finally { submitting = false; $('#next-step').disabled = false; $('#next-step').textContent = step === 3 ? 'Deploy cluster' : 'Continue →'; }

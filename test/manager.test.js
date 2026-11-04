@@ -40,7 +40,9 @@ async function fixture(t, { failSetup = false, failStop = false, managedStorage 
     async open() { return { plan, paths: {}, driver, storage, environment: {}, observe }; },
   };
   const setup = createSetupService({ root, adapters, publishShardMap: async () => calls.push('shard-map') });
-  const manager = createManager({ root, adapters, setup, check: async () => calls.push('check') });
+  const manager = createManager({ root, adapters, setup, check: async () => calls.push('check'),
+    resolveLatestRelease: async () => { calls.push('latest-release'); return { version: 'v1.2.3' }; },
+  });
   return { root, calls, manager };
 }
 const input = { name: 'test', target: 'docker', preset: 'tiny', adminPassword: 'top-secret-password' };
@@ -49,7 +51,7 @@ test('deployment names are unique, state is private, and secrets never appear in
   const { root, manager } = await fixture(t);
   const record = await manager.deploy(input);
   assert.equal(record.phase, 'ready');
-  assert.equal(record.release.version, 'objy-eb221e0');
+  assert.equal(record.release.version, 'v1.2.3');
   assert.ok(!JSON.stringify(record).includes(input.adminPassword));
   assert.ok(!JSON.stringify(await manager.list()).includes(input.adminPassword));
   const dir = join(root, record.id);
@@ -70,10 +72,12 @@ test('failed setup resumes the same deployment without recreating durable storag
   assert.equal(after.phase, 'ready');
   assert.equal(calls.filter(c => c === 'storage').length, 1);
   assert.equal(calls.filter(c => c === 'shard-map').length, 1);
+  assert.equal(calls.filter(c => c === 'latest-release').length, 1);
+  assert.equal(after.release.version, before.release.version);
 });
 
 test('lifecycle failures persist, block competing actions and resume', async t => {
-  const { manager, root } = await fixture(t, { failStop: true });
+  const { manager, root, calls } = await fixture(t, { failStop: true });
   const record = await manager.deploy(input);
   await assert.rejects(manager.act('test', 'stop'), /temporary stop failure/);
   await assert.rejects(manager.act('test', 'start'), /unfinished/);
@@ -84,6 +88,7 @@ test('lifecycle failures persist, block competing actions and resume', async t =
   const state = await readJson(join(root, record.id, 'installation.json'));
   assert.deepEqual(state.management.operation.completed, ['stop', 'start']);
   assert.equal(state.management.operation.status, 'complete');
+  assert.equal(calls.filter(c => c === 'latest-release').length, 1);
 });
 
 test('concurrent deployment submissions do not create duplicate names', async t => {

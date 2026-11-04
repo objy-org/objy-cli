@@ -43,9 +43,8 @@ export async function startUi({ environment = process.env, manager = createManag
       if (request.method === 'POST' && url.pathname === '/api/deploy') {
         const body = await readBody(request);
         const values = normalizeAnswers(withCredentials({ ...body.answers, target: targetId(body.answers?.target) }, environment));
-        if (body.releaseFile !== undefined && (typeof body.releaseFile !== 'string' || body.releaseFile.length > 4096)) throw new Error('Invalid release manifest path');
         const secrets = splitAnswers(values).secrets;
-        return json(response, 202, launch(values.name, 'deploy', onEvent => manager.deploy(values, { releaseFile: body.releaseFile || undefined, onEvent }), secrets));
+        return json(response, 202, launch(values.name, 'deploy', onEvent => manager.deploy(values, { onEvent }), secrets));
       }
       if (request.method === 'POST' && url.pathname === '/api/doctor') {
         const { target, protocol = 'http' } = await readBody(request);
