@@ -59,7 +59,7 @@ export function createManager({ environment = process.env, root = cliHome(enviro
         if (!pending || pending.status !== 'pending') throw new Error('There is no unfinished operation.');
         action = pending.action;
       }
-      await check(record.settings.target, { environment, action, protocol: record.settings.protocol, sourceRequired: false });
+      await check(record.settings.target, { environment, action, protocol: record.settings.protocol, storage: record.settings.storage, sourceRequired: false });
       const emit = message => { try { onEvent({ message: redact(message, secrets) }); } catch {} };
       record.management ||= {};
       const operation = resume ? pending : { id: randomUUID(), action, status: 'pending', completed: [], startedAt: new Date().toISOString() };
@@ -81,6 +81,10 @@ export function createManager({ environment = process.env, root = cliHome(enviro
           if (nodes.some(node => !node || !['exited', 'inactive', 'stopped'].includes(node.state))) throw new Error('Not all nodes have confirmed shutdown. Use objy resume after checking logs.');
         });
         if (['start', 'restart'].includes(action)) {
+          if (ctx.storage?.start) {
+            emit('Checking cluster storage');
+            await ctx.storage.start(ctx.plan, paths, { environment: ctx.environment, targetDriver: driver, progress: emit });
+          }
           await phase('start', () => driver.start(paths, { environment: ctx.environment }));
           record.topology = await ready(ctx, emitEvent => emit(emitEvent.message));
         }
@@ -106,7 +110,7 @@ export function createManager({ environment = process.env, root = cliHome(enviro
     async deploy(input, { releaseFile, onEvent = () => {} } = {}) {
       const values = normalizeAnswers({ ...input, target: targetId(input.target) });
       const release = await readRelease(releaseFile);
-      await check(values.target, { environment, protocol: values.protocol });
+      await check(values.target, { environment, protocol: values.protocol, storage: values.storage });
       const record = await withLock(join(root, 'names.lock'), async () => {
         if ((await setup.list()).some(record => record.name === values.name)) throw new Error(`Deployment ${values.name} already exists. Use status, start or resume.`);
         return setup.create(values, randomUUID(), release);
@@ -122,7 +126,7 @@ export function createManager({ environment = process.env, root = cliHome(enviro
       const record = await find(name);
       if (record.phase !== 'ready') {
         const snapshot = await readJson(join(directory(record.id), 'terraform/module-source.json'), null);
-        await check(targetId(record.target), { environment, sourceRequired: !snapshot, protocol: record.protocol });
+        await check(targetId(record.target), { environment, sourceRequired: !snapshot, protocol: record.protocol, storage: record.storage });
         return output(await setup.run(record.id, options));
       }
       return lifecycle(record.id, null, { ...options, resume: true });

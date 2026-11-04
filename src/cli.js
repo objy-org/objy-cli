@@ -208,7 +208,7 @@ Sizes:   tiny, small, medium, large, custom
 
 Deploy: --name, --size, --region, --protocol http|https, --domain
 Custom: --shards, --replicas, --memory <MiB>
-Storage: --storage, --s3-endpoint, --s3-region, --s3-bucket
+Storage: --storage auto|external-s3, --s3-endpoint, --s3-region, --s3-bucket
 Advanced: --config <json>, --release-manifest <json>, --yes
 Logs: --node <id>, --lines <count>, --follow
 UI: --port <number>, --no-open

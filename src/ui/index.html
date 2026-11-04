@@ -51,7 +51,7 @@
   </dialog>
   <div id="toast" class="toast" role="status" hidden></div>
   <script type="module" nonce="__NONCE__">
-    import { targets, presets, wizardFields, validateField, capacity } from '/catalog.js';
+    import { targets, presets, storageChoices, wizardFields, validateField, capacity } from '/catalog.js';
     const $ = selector => document.querySelector(selector);
     const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
     const token = $('meta[name="objy-token"]').content;
@@ -134,7 +134,7 @@
         const groups = Map.groupBy(c?.topology?.nodes || [], node => node.shard);
         html += '<section class="panel topology"><div class="panel-title"><h2>Cluster topology</h2><small>' + (c?.topology ? c.topology.nodes.filter(n => n.status === 'ready').length + ' / ' + c.topology.nodes.length + ' ready' : 'Waiting for nodes') + '</small></div>';
         html += groups.size ? '<div class="shards">' + [...groups].map(([shard, nodes], i) => '<section class="shard"><h3>Shard ' + (i + 1) + '</h3>' + nodes.map(n => '<div class="node"><div class="node-top"><strong>Node ' + esc(n.replica) + '</strong>' + badge(n.status) + '</div><code>' + esc(n.address || 'Address unavailable') + '</code><small>' + esc(n.heapMb / 1024) + ' GiB memory</small></div>').join('') + '</section>').join('') + '</div>' : '<p class="muted">Your nodes will appear here as setup progresses.</p>';
-        if (c?.topology?.storage) html += '<div class="storage">' + icon('storage') + '<div><p>Shared storage</p><small>' + esc(c.topology.storage.bucket) + '</small></div></div>';
+        if (c?.topology?.storage) html += '<div class="storage">' + icon('storage') + '<div><p>Shared storage · ' + (c.topology.storage.managed ? 'Automatically provisioned' : 'Existing S3') + '</p><small>' + esc(c.topology.storage.bucket) + '</small></div>' + (c.topology.storage.state && c.topology.storage.state !== 'external' ? badge(c.topology.storage.state) : '') + '</div>';
         html += '</section>';
       }
       const events = job?.events?.length ? job.events : c?.events || [];
@@ -171,6 +171,7 @@
         const size = capacity(answers);
         const rows = [['Name',answers.name],['Platform',label(answers.target)],['Size',(presets.find(p => p.value === answers.preset)?.label || 'Custom') + ' · ' + size.nodes + ' nodes'],['Memory per node',size.heapMb / 1024 + ' GiB'],['Connection',answers.protocol.toUpperCase() + (answers.domain ? ' · ' + answers.domain : '')]];
         if (answers.target === 'hetzner') rows.splice(2,0,['Location',answers.region || 'fsn1']);
+        rows.push(['Storage', storageChoices(answers.target).find(s => s.value === answers.storage)?.label || 'Automatic']);
         fields.innerHTML = '<div class="review">' + rows.map(([key,value]) => '<div class="review-row"><span>' + esc(key) + '</span><strong>' + esc(value) + '</strong></div>').join('') + '</div><p class="review-note">' + (answers.target === 'hetzner' ? 'This creates cloud resources in your Hetzner account. Your provider’s usage charges apply.' : 'Your cluster will be installed and started with these settings.') + '</p><details><summary>Advanced options</summary><div class="field"><label for="release-file">Server release manifest</label><input id="release-file" placeholder="Use the default pinned release"><small>Optional path to a release manifest on this computer.</small></div></details>';
         $('#release-file').value = releaseFile; return;
       }
@@ -179,7 +180,7 @@
         if (field.group && field.group !== group) { group = field.group; const title = document.createElement('div'); title.className = 'vm-title'; title.textContent = group; fields.append(title); }
         const container = document.createElement('div'); container.className = 'field';
         const fieldLabel = document.createElement('label'); fieldLabel.textContent = field.label; fieldLabel.htmlFor = 'field-' + field.id; container.append(fieldLabel);
-        if (['target','preset'].includes(field.id)) {
+        if (['target','preset'].includes(field.id) || field.id === 'storage' && ['docker','node-process'].includes(answers.target)) {
           const choices = document.createElement('div'); choices.className = 'choices'; choices.setAttribute('role','group'); choices.setAttribute('aria-label',field.label);
           for (const option of field.options) {
             const button = document.createElement('button'); button.type = 'button'; button.className = 'choice' + ((answers[field.id] || field.defaultValue) === option.value ? ' selected' : '') + (option.value === 'custom' ? ' wide' : '');

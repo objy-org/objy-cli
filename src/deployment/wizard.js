@@ -1,6 +1,6 @@
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
-import { steps, wizardFields, validateField, normalizeAnswers, capacity, summary } from './catalog.js';
+import { steps, wizardFields, validateField, normalizeAnswers, capacity, summary, automaticStorage, storageChoices } from './catalog.js';
 
 export async function runWizard({ input = process.stdin, output = process.stdout, ask, initial = {} } = {}) {
   let terminal;
@@ -29,7 +29,7 @@ export async function runWizard({ input = process.stdin, output = process.stdout
       while (true) {
         const f = wizardFields(values, step).find(f => !visited.has(f.id));
         if (!f) break;
-        if (initial[f.id] !== undefined) { values[f.id] = validateField(f, initial[f.id]); visited.add(f.id); continue; }
+        if (initial[f.id] !== undefined) { values[f.id] = validateField(f, f.id === 'storage' && initial.storage === 'auto' ? automaticStorage(values.target) : initial[f.id]); visited.add(f.id); continue; }
         if (f.group && f.group !== group) { output.write(`\n${f.group}\n`); group = f.group; }
         if (f.help) output.write(`${f.help}\n`);
         if (f.options) f.options.forEach((o, i) => output.write(`  ${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}\n`));
@@ -52,6 +52,7 @@ export async function runWizard({ input = process.stdin, output = process.stdout
     }
     const normalized = normalizeAnswers(values);
     output.write(`\n${normalized.name}\n${summary(normalized)}\n${normalized.protocol.toUpperCase()} · Sign in as admin\n`);
+    output.write(`Storage: ${storageChoices(normalized.target).find(choice => choice.value === normalized.storage).label}\n`);
     const answer = await ask({ id: 'confirm', label: 'Create cluster' }, 'Deploy cluster? [y/N]: ');
     return /^y(es)?$/i.test(answer.trim()) ? normalized : null;
   } finally { terminal?.close(); }

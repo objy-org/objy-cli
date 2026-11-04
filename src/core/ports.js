@@ -103,6 +103,10 @@ export async function reservedLocalPorts(root, run, { requireDocker = false } = 
     if (!['docker', 'node-process'].includes(plan.driver)) continue;
     for (const node of plan.nodes) ports.add(node.hostPort || node.port);
     if (plan.edge?.port) ports.add(plan.edge.port);
+    const localStorage = plan.storage?.local;
+    if (Number.isInteger(localStorage?.basePort) && Number.isInteger(localStorage?.portCount)) {
+      for (let i = 0; i < localStorage.portCount; i++) ports.add(localStorage.basePort + i);
+    }
     const services = plan.storage?.targetExtensions?.docker?.services || {};
     for (const service of Object.values(services)) for (const mapping of service.ports || []) ports.add(Number(mapping.split(':').at(-2)));
   }

@@ -13,6 +13,11 @@ export const presets = [
   { value: 'custom', label: 'Custom', description: 'Choose your cluster size.' },
 ];
 export const steps = ['Where?', 'How big?', 'Finish setup'];
+export function automaticStorage(target = 'docker') {
+  const storage = ({ docker: 'docker-minio', 'node-process': 'local-s3', local: 'local-s3' })[target];
+  if (!storage) throw new Error('Automatic storage is available for local and Docker deployments');
+  return storage;
+}
 export const regions = [
   { value: 'fsn1', label: 'Falkenstein, Germany' },
   { value: 'nbg1', label: 'Nuremberg, Germany' },
@@ -31,9 +36,10 @@ export function capacity(values) {
 
 export function storageChoices(target) {
   return [
-    ...(target === 'docker' ? [{ value: 'docker-minio', label: 'Included local storage' }] : []),
+    ...(target === 'docker' ? [{ value: 'docker-minio', label: 'Provision storage automatically', description: 'Included storage, managed for you.' }] : []),
+    ...(target === 'node-process' ? [{ value: 'local-s3', label: 'Provision storage automatically', description: 'Local storage, managed for you. No Docker needed.' }] : []),
     ...(target === 'hetzner' ? [{ value: 'hetzner-object-storage', label: 'Hetzner Object Storage' }] : []),
-    { value: 'external-s3', label: 'Existing S3-compatible storage' },
+    { value: 'external-s3', label: 'Use existing S3 storage', description: 'Connect a bucket you already have.' },
   ];
 }
 
@@ -79,7 +85,7 @@ export function wizardFields(values = {}, step) {
       field('s3Region', 'Storage region', { defaultValue: 'us-east-1' }),
       field('s3Bucket', 'Existing bucket'),
     ] : []),
-    ...(storage !== 'docker-minio' ? [secret('accessKey', 'Storage access key'), secret('secretKey', 'Storage secret key')] : []),
+    ...(!['docker-minio', 'local-s3'].includes(storage) ? [secret('accessKey', 'Storage access key'), secret('secretKey', 'Storage secret key')] : []),
     select('protocol', 'Connection', [{ value: 'http', label: 'HTTP' }, { value: 'https', label: 'HTTPS' }], 'http'),
     ...(target === 'hetzner' && values.protocol === 'https' ? [field('domain', 'Domain name', {
       maxLength: 253, placeholder: 'db.yourdomain.com',
@@ -124,6 +130,9 @@ export function normalizeDomain(value) {
 
 export function normalizeAnswers(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Setup answers are required');
+  if (input.storage === 'auto') {
+    input = { ...input, storage: automaticStorage(input.target) };
+  }
   const values = {};
   for (let step = 0; step < steps.length; step++) {
     // Re-evaluate after every selection: dependent fields share the same defaults everywhere.

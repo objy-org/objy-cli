@@ -42,6 +42,10 @@ objy deploy vm --name private-cluster --size small
 
 Use `--size custom --shards 2 --replicas 2 --memory 4096` for a custom cluster. Memory is the database heap allocation, not total machine RAM.
 
+For local and Docker deployments, choose **Provision storage automatically** or **Use existing S3 storage**. Automatic storage creates the bucket and credentials: MinIO for Docker, or open-source SeaweedFS for local Node.js. SeaweedFS uses [Apache 2.0](https://github.com/seaweedfs/seaweedfs/blob/4.52/LICENSE), which permits production use. Its runtime downloads on demand with a pinned checksum; Docker is not required. Data persists across restarts.
+
+For scripts, use `--storage auto` (the default locally) or `--storage external-s3 --s3-endpoint <url> --s3-region <region> --s3-bucket <bucket>`, with your S3 credentials in the environment.
+
 ## Manage
 
 ```sh
@@ -60,7 +64,7 @@ objy resume production
 
 | Destination | Requirements |
 | --- | --- |
-| Local | Node.js and npm; an existing S3-compatible bucket. Caddy only for HTTPS. |
+| Local | Node.js and npm. Caddy only for HTTPS. Storage can be provisioned automatically or use an existing S3 bucket. |
 | Docker | Docker Engine and Compose. Local object storage is included. |
 | VMs | Linux machines with SSH, Node.js 22+, npm, tar, systemd and passwordless sudo; reachable S3 storage. |
 | Hetzner | Terraform 1.7+, a local Terraform checkout, cloud API token and object-storage credentials. |
@@ -104,6 +108,8 @@ objy status dev --json
 `--config deployment.json` provides wizard fields for scripting, including VM connections (`vm0Host`, `vm0User`, `vm0Port`, `vm0Auth`, `vm0Key`, repeated per node). Command flags override the file. Keep credentials in environment variables or a private file.
 
 State, credentials, keys and downloaded releases live under `~/.objy`, with private filesystem permissions. Use `OBJY_HOME` or `--home` to choose another directory. Credentials are stored locally, not encrypted. Existing installer deployments are not imported automatically.
+
+Automatic local storage listens on loopback and keeps its data inside the deployment's `runtime/storage` directory. `stop` leaves storage available; `start` also brings it back after a reboot. Downloaded storage runtimes are cached separately. Local storage supports macOS/Linux on x64 and ARM64, and Windows on x64.
 
 SSH host keys are pinned on first connection. A changed key is rejected.
 

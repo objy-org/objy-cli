@@ -133,8 +133,8 @@ export function createSetupService({
           Object.assign(environment, generated);
           await writeJson(join(directory, 'secrets.json'), secrets);
           if (storage.id === 'external-s3') await checkStorage(plan, environment, { timeoutMs: 15000 });
-          await storage.provision?.(plan, paths, { targetDriver: driver, environment });
-        });
+          await storage.provision?.(plan, paths, { targetDriver: driver, environment, progress: emit });
+        }, { always: storage.id === 'local-s3' });
         await phase('shard-map', 'Connecting shards and replicas', () => publishShardMap(plan, resolvePlanSecrets(plan, environment)));
         await phase('runtime', 'Installing and starting database nodes', () => prepared.start());
         await phase('readiness', 'Waiting for all nodes to restore their data', async () => {
@@ -188,7 +188,7 @@ function publicRecord(record) {
   return {
     release: record.release, management: record.management || null,
     id: record.id, name: record.settings.name, target: record.settings.target,
-    region: record.settings.region, protocol: record.settings.protocol, capacity: record.capacity, dns: record.dns || null,
+    region: record.settings.region, protocol: record.settings.protocol, storage: record.settings.storage, capacity: record.capacity, dns: record.dns || null,
     phase: record.phase, error: record.error, events: record.events, topology: record.topology,
     createdAt: record.createdAt, updatedAt: record.updatedAt,
   };

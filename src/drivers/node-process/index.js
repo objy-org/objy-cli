@@ -225,7 +225,7 @@ export async function processIdentity(pid) {
     return stdout.trim() || null;
   } catch { return null; }
 }
-async function ownsProcess(record) {
+export async function ownsProcess(record) {
   if (!processExists(record.pid)) return false;
   const observed = await processIdentity(record.pid);
   if (!observed) {
@@ -234,7 +234,7 @@ async function ownsProcess(record) {
   }
   return Boolean(record.identity && record.identity === observed);
 }
-async function terminate(records) {
+export async function terminate(records) {
   for (const record of records) {
     if (!await ownsProcess(record)) continue;
     try { process.kill(record.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }

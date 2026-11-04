@@ -1,0 +1,11 @@
+{
+  "version": "4.52",
+  "source": "https://github.com/seaweedfs/seaweedfs/releases/tag/4.52",
+  "assets": {
+    "darwin-x64": { "file": "darwin_amd64.tar.gz", "sha256": "da72538d30dd25a9f26f52edd09c42136932ec88b7c9340da3f1ed3e6d11a2f1" },
+    "darwin-arm64": { "file": "darwin_arm64.tar.gz", "sha256": "7aed4f7db8048a8aedab47a71ea4dd3875caa5abdb925d6aa72fb65438a47910" },
+    "linux-x64": { "file": "linux_amd64.tar.gz", "sha256": "8b538c22d47d0c3fb6792adaa6b0c735a967401270a53427d5a476dcaca9b7ae" },
+    "linux-arm64": { "file": "linux_arm64.tar.gz", "sha256": "b70a09540bf8aa2b9ea2a48b3b16abe27e162e90a0c3bf041f8d414caf52de8a" },
+    "win32-x64": { "file": "windows_amd64.zip", "sha256": "e3dfe6c441686887b8fdde4420aa2c11ad9c8ce152340bd053e8176e07851a26" }
+  }
+}

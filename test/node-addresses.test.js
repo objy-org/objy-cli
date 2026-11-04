@@ -28,6 +28,10 @@ for (const protocol of ['http', 'https']) test(`Docker ${protocol} topology show
       calls.push({ command, args });
       assert.equal(command, 'docker');
       if (args[0] === 'compose') {
+        if (args.at(-1) === 'objydb-minio') {
+          assert.deepEqual(args.slice(3), ['ps', '--format', 'json', 'objydb-minio']);
+          return { stdout: JSON.stringify({ Service: 'objydb-minio', State: 'running' }) };
+        }
         assert.deepEqual(args.slice(3), ['ps', '--all', '--format', 'json']);
         return { stdout: [...nodes.map((node, i) => ({ ID: `container-${i}`, Service: node.id, State: 'running' })),
           { ID: 'edge', Service: 'objydb-caddy', State: 'running' }, { ID: 'storage', Service: 'objydb-minio', State: 'running' }].map(JSON.stringify).join('\n') };
@@ -46,6 +50,8 @@ for (const protocol of ['http', 'https']) test(`Docker ${protocol} topology show
   const topology = await inspect();
   assert.deepEqual(topology.nodes.map(node => node.address), ['172.23.0.3:8080', '[fd00::4]:8080', null]);
   assert.ok(topology.nodes.every(node => node.status === 'ready'));
+  assert.equal(topology.storage.managed, true);
+  assert.equal(topology.storage.state, 'running');
   assert.equal(topology.endpoint, nodes[0].publicUrl);
   assert.ok(probed.includes(`${nodes[0].healthUrl}/health`));
   firstIp = '172.23.0.9';

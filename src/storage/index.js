@@ -1,10 +1,11 @@
 import { createDockerMinioDriver } from "./docker-minio.js";
 import { createExternalS3Driver } from "./external-s3.js";
 import { createHetznerObjectStorageDriver } from "./hetzner-object-storage.js";
+import { createLocalS3Driver } from './local-s3.js';
 
 export function createDefaultStorageDrivers() {
   const drivers = [
-    createExternalS3Driver(), createDockerMinioDriver(), createHetznerObjectStorageDriver(),
+    createExternalS3Driver(), createDockerMinioDriver(), createLocalS3Driver(), createHetznerObjectStorageDriver(),
   ];
   return Object.fromEntries(drivers.map((driver) => [driver.id, driver]));
 }

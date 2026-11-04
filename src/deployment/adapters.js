@@ -36,6 +36,8 @@ export function secretEnvironment(secrets) {
 }
 
 export function createAdapters({ environment = process.env, run = runProcess, transport = createSshTransport(), fetchImpl = fetch, lookup = lookupAddress, resolveRelease = () => { throw new Error('No server release selected'); }, terraform = createTerraformProvisioner({ environment, run, fetchImpl }) } = {}) {
+  // Storage credentials belong to this deployment, never an unrelated ambient server configuration.
+  const deploymentEnvironment = secrets => ({ ...environment, OBJYDB_S3_ACCESS_KEY: undefined, OBJYDB_S3_SECRET_KEY: undefined, ...secretEnvironment(secrets) });
   const storageDrivers = createDefaultStorageDrivers();
   const drivers = { docker: createDockerDriver({ run }), 'node-process': createNodeProcessDriver({ run }), vm: createVmDriver({ run, transport }) };
   return {
@@ -48,13 +50,13 @@ export function createAdapters({ environment = process.env, run = runProcess, tr
         driver = cloudDriver(infrastructure, plan.target.hetzner.sourceDirectory);
       }
       if (!driver) throw new Error('Unknown deployment target');
-      const env = { ...environment, ...secretEnvironment(secrets) };
-      return { plan, paths, driver, environment: env, observe: () => observe(plan, paths, driver, env) };
+      const env = deploymentEnvironment(secrets);
+      return { plan, paths, driver, storage: storageDrivers[plan.storage.driver], environment: env, observe: () => observe(plan, paths, driver, env) };
     },
     async prepare(context) {
       const { record, directory, secrets, emit } = context;
       const paths = installationPaths(join(directory, 'runtime'));
-      const env = { ...environment, ...secretEnvironment(secrets) };
+      const env = deploymentEnvironment(secrets);
       let plan = await readJson(paths.plan, null);
       let driver = drivers[record.settings.target];
       const target = record.settings.target;
@@ -161,7 +163,7 @@ export function createAdapters({ environment = process.env, run = runProcess, tr
         if (!infrastructure) return null;
         driver = cloudDriver(infrastructure, plan.target.hetzner.sourceDirectory);
       }
-      return observe(plan, paths, driver, { ...environment, ...secretEnvironment(secrets) });
+      return observe(plan, paths, driver, deploymentEnvironment(secrets));
     },
   };
 
@@ -257,7 +259,12 @@ export function createAdapters({ environment = process.env, run = runProcess, tr
     const endpoint = plan.endpoint || plan.nodes[0]?.publicUrl;
     const endpointReady = endpoint ? await healthReady(endpoint, fetchImpl) : false;
     const localCertificate = endpoint?.startsWith('https:') && isLocalIdentity(new URL(endpoint).hostname.replace(/^\[|\]$/g, ''));
-    return { nodes, endpoint, endpointReady, localCertificate: Boolean(localCertificate), storage: { label: plan.storage.driver, bucket: plan.persistence.bucket }, checkedAt: new Date().toISOString() };
+    const storage = storageDrivers[plan.storage.driver];
+    const storageStatus = storage?.status ? await storage.status(plan, paths, { targetDriver: driver, environment: env }) : null;
+    return { nodes, endpoint, endpointReady, localCertificate: Boolean(localCertificate), storage: {
+      label: storage?.label || plan.storage.driver, driver: plan.storage.driver, managed: Boolean(storage?.managed),
+      bucket: plan.persistence.bucket, endpoint: plan.persistence.endpoint, state: storageStatus?.state || 'external',
+    }, checkedAt: new Date().toISOString() };
   }
 }
 

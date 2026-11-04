@@ -1,11 +1,12 @@
 import { access } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { runProcess } from './core/process.js';
+import { seaweedRelease } from './storage/native-runtime.js';
 
 export const targetId = value => value === 'local' ? 'node-process' : value;
 export const targetName = value => value === 'node-process' ? 'local' : value;
 
-export async function doctor(target, { environment = process.env, run = runProcess, protocol = 'http', sourceRequired = true, action = 'deploy' } = {}) {
+export async function doctor(target, { environment = process.env, run = runProcess, protocol = 'http', storage, sourceRequired = true, action = 'deploy' } = {}) {
   target = targetId(target);
   if (!['docker', 'node-process', 'vm', 'hetzner'].includes(target)) throw new Error('Choose local, docker, vm or hetzner');
   const checks = [{ name: 'Node.js', ok: Number(process.versions.node.split('.')[0]) >= 22, detail: process.version, install: 'https://nodejs.org/en/download' }];
@@ -14,6 +15,10 @@ export async function doctor(target, { environment = process.env, run = runProce
     catch { checks.push({ name, ok: false, detail: `${name} is unavailable`, install }); }
   }
   if (target === 'node-process') {
+    if ((!storage || ['auto', 'local-s3'].includes(storage)) && action !== 'stop') {
+      try { const release = seaweedRelease(); checks.push({ name: 'Automatic local storage', ok: true, detail: `SeaweedFS ${release.version} will be downloaded when needed` }); }
+      catch (error) { checks.push({ name: 'Automatic local storage', ok: false, detail: error.message }); }
+    }
     if (action === 'deploy') await command('npm', process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--version'], 'https://nodejs.org/en/download');
     if (protocol === 'https' && action !== 'stop') await command('Caddy', 'caddy', ['version'], 'https://caddyserver.com/docs/install');
   }

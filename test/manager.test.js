@@ -8,7 +8,7 @@ import { createSetupService } from '../src/deployment/service.js';
 import { sampleManifest } from '../src/core/manifest.js';
 import { readJson } from '../src/deployment/files.js';
 
-async function fixture(t, { failSetup = false, failStop = false } = {}) {
+async function fixture(t, { failSetup = false, failStop = false, managedStorage = false, failStorageStart = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'objy-manager-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const calls = [];
@@ -22,14 +22,22 @@ async function fixture(t, { failSetup = false, failStop = false } = {}) {
     async status() { return [{ nodeId: 'node-1', state: running ? 'running' : 'exited' }]; },
     async readLogs() { return 'hello top-secret-password'; },
   };
+  const storage = {
+    id: managedStorage ? 'local-s3' : 'docker-minio',
+    provision: async () => calls.push('storage'),
+    ...(managedStorage ? { async start() {
+      calls.push('storage-start');
+      if (failStorageStart) { failStorageStart = false; throw new Error('storage is unavailable'); }
+    } } : {}),
+  };
   const adapters = {
     async prepare({ secrets }) {
       calls.push('prepare');
-      return { plan, paths: {}, driver, environment: { OBJYDB_ADMIN_PASSWORD: secrets.adminPassword, OBJYDB_JWT_SECRET: secrets.jwtSecret, OBJYDB_CLUSTER_SECRET: secrets.clusterSecret, OBJYDB_S3_ACCESS_KEY: 'fixture-access', OBJYDB_S3_SECRET_KEY: 'fixture-secret' }, storage: { id: 'docker-minio', provision: async () => calls.push('storage') },
+      return { plan, paths: {}, driver, environment: { OBJYDB_ADMIN_PASSWORD: secrets.adminPassword, OBJYDB_JWT_SECRET: secrets.jwtSecret, OBJYDB_CLUSTER_SECRET: secrets.clusterSecret, OBJYDB_S3_ACCESS_KEY: 'fixture-access', OBJYDB_S3_SECRET_KEY: 'fixture-secret' }, storage,
         start: async () => { calls.push('install'); if (failSetup) { failSetup = false; throw new Error('failure top-secret-password'); } }, observe };
     },
     inspect: observe,
-    async open() { return { plan, paths: {}, driver, environment: {}, observe }; },
+    async open() { return { plan, paths: {}, driver, storage, environment: {}, observe }; },
   };
   const setup = createSetupService({ root, adapters, publishShardMap: async () => calls.push('shard-map') });
   const manager = createManager({ root, adapters, setup, check: async () => calls.push('check') });
@@ -83,6 +91,18 @@ test('concurrent deployment submissions do not create duplicate names', async t 
   const results = await Promise.allSettled([manager.deploy(input), manager.deploy(input)]);
   assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
   assert.equal((await manager.list()).length, 1);
+});
+
+test('starting waits for managed storage and resumes a failed storage start', async t => {
+  const { manager, calls } = await fixture(t, { managedStorage: true, failStorageStart: true });
+  await manager.deploy(input);
+  await manager.act('test', 'stop');
+  calls.length = 0;
+  await assert.rejects(manager.act('test', 'start'), /storage is unavailable/);
+  assert.ok(!calls.includes('start'));
+  assert.equal((await manager.status('test')).state, 'interrupted');
+  assert.equal((await manager.resume('test')).state, 'running');
+  assert.deepEqual(calls.filter(c => ['storage-start', 'start'].includes(c)), ['storage-start', 'storage-start', 'start']);
 });
 
 test('missing dependencies fail before deployment state or resources are created', async t => {

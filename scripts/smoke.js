@@ -19,7 +19,8 @@ try {
   await manager.deploy({ target: 'local', name: 'smoke-local', preset: 'small', adminPassword: randomBytes(24).toString('hex'),
     storage: 'external-s3', s3Endpoint: storage.endpoint, s3Region: storage.region, s3Bucket: storage.bucket,
     accessKey: credentials.accessKey, secretKey: credentials.secretKey }, { onEvent });
-  for (const name of ['smoke-local', 'smoke-docker']) {
+  await manager.deploy({ target: 'local', name: 'smoke-auto', preset: 'small', storage: 'auto', adminPassword: randomBytes(24).toString('hex') }, { onEvent });
+  for (const name of ['smoke-local', 'smoke-auto', 'smoke-docker']) {
     const deployment = await manager.status(name);
     const secrets = JSON.parse(await readFile(join(root, deployment.id, 'secrets.json')));
     const endpoint = deployment.topology.endpoint;
@@ -37,6 +38,13 @@ try {
     await request('/api/smoke/collections', 'POST', { name: 'items' });
     await request('/api/smoke/items/object', 'POST', { _id: 'saved', value: 42 });
     assert.equal((await manager.act(name, 'stop', { onEvent })).state, 'stopped');
+    if (name === 'smoke-auto') {
+      const directory = join(root, deployment.id), record = JSON.parse(await readFile(join(directory, 'installation.json')));
+      const context = await createAdapters().open({ record, directory, secrets });
+      await context.storage.stop(context.plan, context.paths);
+      // These are disposable test WALs. Force recovery from the persisted S3 data after storage restarts.
+      await rm(join(directory, 'wal'), { recursive: true, force: true });
+    }
     assert.equal((await manager.act(name, 'start', { onEvent })).state, 'running');
     await login();
     assert.equal((await request('/api/smoke/items/object/saved')).value, 42);
@@ -56,6 +64,7 @@ try {
       const secrets = JSON.parse(await readFile(join(directory, 'secrets.json')));
       const context = await createAdapters().open({ record, directory, secrets });
       await context.driver.stop(context.paths, { environment: context.environment });
+      if (context.plan.storage.driver === 'local-s3') await context.storage.stop(context.plan, context.paths);
       if (item.target === 'docker') await runProcess('docker', ['compose', '-f', join(directory, 'runtime/compose.json'), 'down', '-v'], { env: context.environment });
     } catch (error) { cleanupFailed = true; console.error(`Cleanup failed for ${item.name}: ${error.message}`); break; }
   }

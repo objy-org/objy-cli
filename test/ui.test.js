@@ -91,6 +91,23 @@ test('background jobs reject conflicting actions and expose redacted failures', 
   assert.equal((await request('/api/clusters/demo/actions', { action: 'resume' })).status, 202);
 });
 
+test('local and Docker storage choices reach the manager without unused credentials', async t => {
+  const { request, ui, calls } = await fixture(t, { environment: { OBJY_S3_ACCESS_KEY: 'environment-access', OBJY_S3_SECRET_KEY: 'environment-secret' } });
+  for (const target of ['docker', 'node-process']) {
+    assert.equal((await request('/api/deploy', { answers: { ...answers, target, storage: 'auto', accessKey: 'unused-access', secretKey: 'unused-secret' } })).status, 202);
+    await ui.settled();
+    const automatic = calls.at(-1)[1];
+    assert.equal(automatic.storage, target === 'docker' ? 'docker-minio' : 'local-s3');
+    assert.equal(automatic.accessKey, undefined); assert.equal(automatic.secretKey, undefined);
+    assert.equal((await request('/api/deploy', { answers: { ...answers, target, storage: 'external-s3' } })).status, 400);
+    const existing = { ...answers, target, storage: 'external-s3', s3Endpoint: 'https://s3.example.com', s3Bucket: 'existing', accessKey: 'test-access', secretKey: 'test-secret' };
+    assert.equal((await request('/api/deploy', { answers: existing })).status, 202);
+    await ui.settled();
+    assert.equal(calls.at(-1)[1].storage, 'external-s3'); assert.equal(calls.at(-1)[1].s3Bucket, 'existing');
+    assert.equal(calls.at(-1)[1].secretKey, 'test-secret');
+  }
+});
+
 test('invalid wizard submissions cannot start an operation; lifecycle actions use the manager', async t => {
   const { request, calls, ui } = await fixture(t);
   for (const body of [{}, { answers: { ...answers, name: '../escape' } }, { answers: { ...answers, adminPassword: 'short' } }, { answers: { ...answers, preset: 'custom', shards: 32, replicas: 3 } }]) {
