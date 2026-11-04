@@ -51,15 +51,29 @@ export async function startUi({ environment = process.env, manager = createManag
         if (!['http', 'https'].includes(protocol)) throw new Error('Choose HTTP or HTTPS');
         return json(response, 200, await doctorImpl(target, { protocol, environment }));
       }
-      const match = url.pathname.match(/^\/api\/clusters\/([a-z][a-z0-9-]{0,47})(?:\/(logs|actions))?$/);
+      const match = url.pathname.match(/^\/api\/clusters\/([a-z][a-z0-9-]{0,47})(?:\/(logs|actions|deletion|rename))?$/);
       if (match) {
         const [, name, resource] = match;
         if (request.method === 'GET' && !resource) return json(response, 200, await manager.status(name));
+        if (request.method === 'GET' && resource === 'deletion') return json(response, 200, await manager.deletionInfo(name));
+        if (request.method === 'POST' && resource === 'rename') {
+          if (running.has(name)) throw Object.assign(new Error('An operation is already running for this cluster'), { statusCode: 409 });
+          const { newName, id } = await readBody(request);
+          const result = await manager.rename(name, newName, { expectedId: id });
+          for (const job of jobs.values()) if (job.name === name) job.name = result.name;
+          return json(response, 200, result);
+        }
         if (request.method === 'GET' && resource === 'logs') return json(response, 200, { logs: await manager.logs(name, {
           node: url.searchParams.get('node') || undefined, tail: Number(url.searchParams.get('lines') || 100),
         }) });
         if (request.method === 'POST' && resource === 'actions') {
-          const { action } = await readBody(request);
+          const { action, confirmation, id } = await readBody(request);
+          if (action === 'delete') {
+            const preview = await manager.deletionInfo(name);
+            if (id !== preview.id || confirmation !== preview.name) throw new Error('Type the current deployment name to confirm deletion');
+            if (preview.blockedBy.length) throw Object.assign(new Error(`Storage is used by ${preview.blockedBy.join(', ')}. Delete those deployments first or move their storage.`), { statusCode: 409 });
+            return json(response, 202, launch(name, 'delete', onEvent => manager.delete(id, { confirmation, onEvent })));
+          }
           if (!['start', 'stop', 'restart', 'resume'].includes(action)) throw new Error('Unknown cluster action');
           return json(response, 202, launch(name, action, onEvent => action === 'resume' ? manager.resume(name, { onEvent }) : manager.act(name, action, { onEvent })));
         }
@@ -77,8 +91,9 @@ export async function startUi({ environment = process.env, manager = createManag
     jobs.set(job.id, job);
     const safe = message => redact(message, { ...credentials, ...secrets });
     const onEvent = event => { job.events.push({ message: safe(event.message), at: new Date().toISOString() }); job.events = job.events.slice(-100); };
-    const promise = Promise.resolve().then(() => operation(onEvent)).then(() => {
-      job.status = 'complete'; onEvent({ message: action === 'deploy' ? 'Your cluster is ready' : 'Operation complete' });
+    const promise = Promise.resolve().then(() => operation(onEvent)).then(result => {
+      job.resultState = result?.state;
+      job.status = 'complete'; onEvent({ message: result?.state === 'deleted' ? 'Deployment deleted' : action === 'deploy' ? 'Your cluster is ready' : 'Operation complete' });
     }).catch(error => { job.status = 'failed'; job.error = safe(error.message); onEvent({ message: job.error }); })
       .finally(() => { job.finishedAt = new Date().toISOString(); running.delete(name); });
     running.set(name, promise);

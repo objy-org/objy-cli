@@ -7,6 +7,7 @@
   <title>Objy · Your clusters</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23141816'/%3E%3Ccircle cx='32' cy='32' r='16' fill='none' stroke='%2369e3a8' stroke-width='8'/%3E%3C/svg%3E">
   <style nonce="__NONCE__">
+    .deployment-menu{position:relative;margin:0}.deployment-menu summary{list-style:none;font-size:19px;line-height:1}.deployment-menu summary::-webkit-details-marker{display:none}.deployment-menu>div{position:absolute;right:0;top:40px;z-index:5;min-width:185px;padding:6px;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:0 10px 35px #0007}.deployment-menu button{display:block;width:100%;padding:10px;border:0;border-radius:7px;background:none;text-align:left;font-size:12px}.deployment-menu button:hover{background:var(--surface-2)}.deployment-menu .delete-action{color:var(--danger)}.delete-summary{padding-left:19px;margin:12px 0}.confirmation-field{margin-top:18px}
     :root { color-scheme:dark; --bg:#0c0f0e; --surface:#141816; --surface-2:#1a201d; --border:#29312c; --text:#f3f6f4; --muted:#929d96; --accent:#69e3a8; --accent-dark:#153828; --warning:#efbd62; --danger:#ff7878; --radius:16px; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
     *{box-sizing:border-box} [hidden]{display:none!important} body{margin:0;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
     button,input,select{font:inherit} button,a,input,select{touch-action:manipulation} button{color:inherit;cursor:pointer} button:disabled{opacity:.4;cursor:not-allowed} a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
@@ -47,7 +48,10 @@
     </form>
   </dialog>
   <dialog id="confirmation" class="confirm-dialog" aria-labelledby="confirm-title">
-    <form id="confirm-form"><div class="dialog-head"><h2 id="confirm-title"></h2><button type="button" class="icon-button" id="close-confirmation" aria-label="Cancel">×</button></div><div class="dialog-body" id="confirm-description"></div><div class="dialog-actions"><button type="button" class="button quiet" id="cancel-action">Cancel</button><button type="submit" class="button primary" id="confirm-action"></button></div></form>
+    <form id="confirm-form"><div class="dialog-head"><h2 id="confirm-title"></h2><button type="button" class="icon-button" id="close-confirmation" aria-label="Cancel">×</button></div><div class="dialog-body"><div id="confirm-description"></div><div class="field confirmation-field" id="delete-confirmation-field" hidden><label for="delete-confirmation">Type the deployment name to confirm</label><input id="delete-confirmation" autocomplete="off" spellcheck="false"></div><div id="confirm-error" class="notice form-error" role="alert" hidden></div></div><div class="dialog-actions"><button type="button" class="button quiet" id="cancel-action">Cancel</button><button type="submit" class="button primary" id="confirm-action"></button></div></form>
+  </dialog>
+  <dialog id="rename-dialog" class="confirm-dialog" aria-labelledby="rename-title">
+    <form id="rename-form"><div class="dialog-head"><div><h2 id="rename-title">Rename deployment</h2><p>Give this cluster a new name.</p></div><button type="button" class="icon-button" id="close-rename" aria-label="Cancel rename">×</button></div><div class="dialog-body"><div class="field"><label for="rename-name">Deployment name</label><input id="rename-name" maxlength="48" autocomplete="off" spellcheck="false" required><small>Lowercase letters, digits and hyphens.</small></div><div id="rename-error" class="notice form-error" role="alert" hidden></div></div><div class="dialog-actions"><button type="button" class="button quiet" id="cancel-rename">Cancel</button><button type="submit" class="button primary" id="save-rename">Save name</button></div></form>
   </dialog>
   <div id="toast" class="toast" role="status" hidden></div>
   <script type="module" nonce="__NONCE__">
@@ -59,7 +63,7 @@
     let view = 'clusters', selected = null, tab = 'topology', clusters = [], jobs = [], detail = null;
     let provided = [], timer, refreshing = false, detailAt = 0, logAt = 0, logNode = '', logs = '', follow = false;
     let checkTarget = 'docker', checkProtocol = 'http', checkResult = null, checking = false;
-    let step = 0, answers = {}, submitting = false, pendingAction = null, toastTimer;
+    let step = 0, answers = {}, submitting = false, pendingAction = null, actionSubmitting = false, renameTarget = null, renaming = false, identityVersion = 0, toastTimer;
     const paths = {
       cpu: '<rect x="5" y="5" width="14" height="14" rx="3"/><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4"/><rect x="9" y="9" width="6" height="6" rx="1"/>',
       plus: '<path d="M12 5v14M5 12h14"/>', arrow: '<path d="m9 5 7 7-7 7"/>',
@@ -84,8 +88,19 @@
     async function refresh(force = false) {
       if (refreshing) return;
       refreshing = true;
+      const identity = identityVersion;
       try {
-        [clusters, jobs] = await Promise.all([api('/api/clusters'), api('/api/jobs')]);
+        const next = await Promise.all([api('/api/clusters'), api('/api/jobs')]);
+        if (identity !== identityVersion) return;
+        [clusters, jobs] = next;
+        if (selected && !clusters.some(c => c.name === selected)) {
+          const renamed = detail?.id && clusters.find(c => c.id === detail.id);
+          if (renamed) { selected = renamed.name; detail = null; detailAt = 0; }
+          else if (view === 'detail' && !busy(selected) && (detail || jobFor(selected)?.resultState === 'deleted')) {
+            if (jobFor(selected)?.resultState === 'deleted') toast('Deployment deleted');
+            selected = null; detail = null; view = 'clusters';
+          }
+        }
         if (selected && clusters.some(c => c.name === selected) && (force || Date.now() - detailAt > 7000)) {
           const name = selected, result = await api('/api/clusters/' + encodeURIComponent(name));
           if (selected === name) { detail = result; detailAt = Date.now(); }
@@ -120,9 +135,10 @@
       const job = jobFor(selected), working = busy(selected) || c?.state === 'working';
       const pending = c && (c.phase !== 'ready' || c.management?.operation?.status === 'pending');
       const endpoint = urlSafe(c?.topology?.endpoint);
-      const controls = pending ? '<button class="button primary small" data-action="resume"' + (working ? ' disabled' : '') + '>Resume</button>' :
+      const controls = pending ? '<button class="button primary small" data-action="resume"' + (working ? ' disabled' : '') + '>' + (c.management?.operation?.action === 'delete' ? 'Resume deletion' : 'Resume') + '</button>' :
         ['start','stop','restart'].map(action => '<button class="button small" data-action="' + action + '"' + (working || !c || action === 'stop' && c.state === 'stopped' || action === 'restart' && c.state === 'stopped' ? ' disabled' : '') + '>' + action[0].toUpperCase() + action.slice(1) + '</button>').join('');
-      let html = '<button class="back" data-nav="clusters">' + icon('back') + ' All clusters</button><div class="heading"><div><div class="title-row"><h1>' + esc(selected) + '</h1>' + badge(working ? 'working' : c?.state || job?.status || 'pending') + '</div><p>' + esc(c ? label(c.target) + ' · ' + (c.capacity?.nodes || 0) + ' nodes' + (c.release ? ' · ' + c.release.version : '') : 'Preparing your deployment') + '</p></div><div class="actions">' + controls + '<button class="button small quiet" data-refresh aria-label="Refresh cluster">' + icon('refresh') + '</button></div></div>';
+      const management = c && !working ? '<details class="deployment-menu"><summary class="button small quiet" aria-label="More actions">···</summary><div><button type="button" data-rename' + (c.management?.operation?.status === 'pending' ? ' disabled' : '') + '>Rename deployment</button>' + (['local','docker','node-process'].includes(c.target) ? '<button type="button" class="delete-action" data-delete>Delete deployment</button>' : '') + '</div></details>' : '';
+      let html = '<button class="back" data-nav="clusters">' + icon('back') + ' All clusters</button><div class="heading"><div><div class="title-row"><h1>' + esc(selected) + '</h1>' + badge(working ? 'working' : c?.state || job?.status || 'pending') + '</div><p>' + esc(c ? label(c.target) + ' · ' + (c.capacity?.nodes || 0) + ' nodes' + (c.release ? ' · ' + c.release.version : '') : 'Preparing your deployment') + '</p></div><div class="actions">' + controls + '<button class="button small quiet" data-refresh aria-label="Refresh cluster">' + icon('refresh') + '</button>' + management + '</div></div>';
       const error = c?.management?.operation?.error || c?.error || (job?.status === 'failed' ? job.error : '');
       if (error) html += '<div class="notice" role="alert">' + esc(error) + '</div>';
       if (c?.stale) html += '<div class="notice info">Live status is unavailable. Showing the last saved topology.</div>';
@@ -247,14 +263,35 @@
     $('#previous-step').onclick = () => { if (submitting) return; collectFields(); if (step === 0) closeWizard(); else { step--; renderWizard(); } };
     $('#close-wizard').onclick = closeWizard;
     $('#wizard').addEventListener('cancel', event => { event.preventDefault(); closeWizard(); });
-    const closeConfirm = () => { pendingAction = null; $('#confirmation').close(); };
+    const closeConfirm = () => { if (actionSubmitting) return; pendingAction = null; $('#confirmation').close(); };
     $('#close-confirmation').onclick = closeConfirm; $('#cancel-action').onclick = closeConfirm;
-    $('#confirmation').addEventListener('cancel', closeConfirm);
+    $('#confirmation').addEventListener('cancel', event => { event.preventDefault(); closeConfirm(); });
+    $('#delete-confirmation').addEventListener('input', () => { if (pendingAction?.action === 'delete') $('#confirm-action').disabled = actionSubmitting || pendingAction.blocked || $('#delete-confirmation').value !== pendingAction.name; });
     $('#confirm-form').addEventListener('submit', async event => {
       event.preventDefault(); if (!pendingAction) return;
-      const {name,action} = pendingAction; closeConfirm();
-      try { notice(''); const job = await api('/api/clusters/' + encodeURIComponent(name) + '/actions', {action}); jobs.push(job); render(); await refresh(true); }
-      catch (error) { notice(error.message); }
+      const {name,action,id} = pendingAction;
+      if (action === 'delete' && (pendingAction.blocked || $('#delete-confirmation').value !== name)) return;
+      actionSubmitting = true; $('#confirm-action').disabled = true;
+      try {
+        notice(''); const job = await api('/api/clusters/' + encodeURIComponent(name) + '/actions', {action, ...(action === 'delete' ? {id,confirmation:$('#delete-confirmation').value} : {})});
+        jobs.push(job); actionSubmitting = false; closeConfirm(); render(); await refresh(true);
+      } catch (error) { $('#confirm-error').textContent = error.message; $('#confirm-error').hidden = false; }
+      finally { actionSubmitting = false; $('#confirm-action').disabled = Boolean(pendingAction?.blocked) || pendingAction?.action === 'delete' && $('#delete-confirmation').value !== pendingAction.name; }
+    });
+    const closeRename = () => { if (!renaming) { renameTarget = null; $('#rename-dialog').close(); } };
+    $('#close-rename').onclick = closeRename; $('#cancel-rename').onclick = closeRename;
+    $('#rename-dialog').addEventListener('cancel', event => { event.preventDefault(); closeRename(); });
+    $('#rename-form').addEventListener('submit', async event => {
+      event.preventDefault(); if (!renameTarget || renaming) return;
+      try {
+        const newName = validateField(wizardFields({},0).find(field => field.id === 'name'), $('#rename-name').value);
+        renaming = true; $('#save-rename').disabled = true;
+        const result = await api('/api/clusters/' + encodeURIComponent(renameTarget.name) + '/rename', {newName,id:renameTarget.id});
+        identityVersion++;
+        selected = result.name; detail = result; detailAt = 0; clusters = clusters.map(c => c.id === result.id ? result : c);
+        renaming = false; closeRename(); toast('Deployment renamed'); render(); await refresh(true);
+      } catch (error) { $('#rename-error').textContent = error.message; $('#rename-error').hidden = false; }
+      finally { renaming = false; $('#save-rename').disabled = false; }
     });
     document.addEventListener('click', async event => {
       const button = event.target.closest('button'); if (!button || button.disabled) return;
@@ -266,10 +303,30 @@
         else if (button.dataset.tab) { tab = button.dataset.tab; render(); if (tab === 'logs') { await loadLogs(); render(); } }
         else if (button.hasAttribute('data-log-refresh')) { await loadLogs(); render(); }
         else if (button.dataset.copy) { await navigator.clipboard.writeText(button.dataset.copy); toast('Endpoint copied'); }
+        else if (button.hasAttribute('data-rename')) {
+          button.closest('details').open = false;
+          const c = detail?.name === selected ? detail : clusters.find(c => c.name === selected);
+          renameTarget = {name:c.name,id:c.id}; $('#rename-name').value = c.name; $('#rename-error').hidden = true;
+          $('#rename-dialog').showModal(); $('#rename-name').focus(); $('#rename-name').select();
+        } else if (button.hasAttribute('data-delete')) {
+          button.closest('details').open = false;
+          const preview = await api('/api/clusters/' + encodeURIComponent(selected) + '/deletion');
+          pendingAction = {name:preview.name,id:preview.id,action:'delete',blocked:preview.blockedBy.length > 0};
+          $('#confirm-title').textContent = 'Delete ' + preview.name + '?';
+          $('#confirm-description').innerHTML = '<p>This permanently removes:</p><ul class="delete-summary">' + preview.removes.map(item => '<li>' + esc(item) + '</li>').join('') + '</ul><p>' + preview.preserves.map(esc).join('. ') + ' will be kept.</p>' + (preview.blockedBy.length ? '<p class="notice form-error">Storage is used by ' + esc(preview.blockedBy.join(', ')) + '. Delete those deployments first or move their storage.</p>' : '');
+          $('#delete-confirmation-field').hidden = false; $('#delete-confirmation').value = ''; $('#confirm-error').hidden = true;
+          $('#confirm-action').className = 'button danger'; $('#confirm-action').textContent = 'Delete deployment'; $('#confirm-action').disabled = true;
+          $('#confirmation').showModal(); $('#delete-confirmation').focus();
+        }
         else if (button.dataset.action) {
           const action = button.dataset.action; pendingAction = { name:selected, action };
           $('#confirm-title').textContent = action[0].toUpperCase() + action.slice(1) + ' ' + selected + '?';
           $('#confirm-description').textContent = action === 'stop' ? 'Database nodes will stop. Your data, storage and infrastructure will remain in place. Cloud resources remain billable.' : action === 'restart' ? 'Database nodes will stop and start again. Connections may be interrupted while the cluster comes back online.' : action === 'resume' ? 'Continue the unfinished operation using its saved configuration.' : 'Start the database nodes using their saved configuration.';
+          if (action === 'resume' && (detail || clusters.find(c => c.name === selected))?.management?.operation?.action === 'delete') {
+            $('#confirm-title').textContent = 'Resume deleting ' + selected + '?';
+            $('#confirm-description').textContent = 'Continue permanently deleting this deployment and its dedicated local data. Existing S3 storage is kept.';
+          }
+          $('#delete-confirmation-field').hidden = true; $('#confirm-error').hidden = true; $('#confirm-action').className = 'button primary'; $('#confirm-action').disabled = false;
           $('#confirm-action').textContent = action[0].toUpperCase() + action.slice(1); $('#confirmation').showModal();
         } else if (button.hasAttribute('data-check')) {
           checking = true; checkResult = null; render();

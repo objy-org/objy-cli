@@ -6,7 +6,8 @@ import { createAdapters } from './deployment/adapters.js';
 import { cliHome } from './deployment/state.js';
 import { readJson, writeJson, redact } from './deployment/files.js';
 import { withLock, lockActive } from './deployment/operations.js';
-import { normalizeAnswers } from './deployment/catalog.js';
+import { normalizeAnswers, validateField, wizardFields } from './deployment/catalog.js';
+import { createDeletionService } from './deployment/deletion.js';
 import { createReleaseStore } from './releases.js';
 import { requireDependencies, targetId, targetName } from './doctor.js';
 import { createSshTransport } from './drivers/vm/ssh-transport.js';
@@ -18,6 +19,7 @@ export function createManager({ environment = process.env, root = cliHome(enviro
   adapters ||= createAdapters({ environment, transport: createSshTransport({ knownHostsDirectory: join(root, 'ssh', 'known-hosts') }),
     resolveRelease: (record, emit) => releases.ensure(record.release, { install: record.settings.target === 'node-process', emit }) });
   setup ||= createSetupService({ root, adapters, timeoutMs });
+  const deletion = createDeletionService({ root, adapters, setup, check: (target, options) => check(target, { ...options, environment }) });
   const directory = id => join(root, id);
   const recordPath = id => join(directory(id), 'installation.json');
   const read = id => readJson(recordPath(id));
@@ -53,6 +55,7 @@ export function createManager({ environment = process.env, root = cliHome(enviro
     return withLock(join(directory(id), 'setup.lock'), async () => {
       const ctx = await context(id);
       const { record, secrets, driver, paths } = ctx;
+      if (record.management?.operation?.action === 'delete' && record.management.operation.status === 'pending') throw new Error('Deletion is unfinished. Use objy resume to finish deleting this deployment.');
       if (record.phase !== 'ready') throw new Error('Finish setup with objy resume first.');
       const pending = record.management?.operation;
       if (pending?.status === 'pending' && !resume) throw new Error('An operation is unfinished. Use objy resume first.');
@@ -111,21 +114,38 @@ export function createManager({ environment = process.env, root = cliHome(enviro
     async deploy(input, { onEvent = () => {} } = {}) {
       const values = normalizeAnswers({ ...input, target: targetId(input.target) });
       await check(values.target, { environment, protocol: values.protocol, storage: values.storage });
-      if ((await setup.list()).some(record => record.name === values.name)) throw new Error(`Deployment ${values.name} already exists. Use status, start or resume.`);
+      if ((await setup.list()).some(record => record.name === values.name || record.id === values.name)) throw new Error(`Deployment ${values.name} already exists. Use status, start or resume.`);
       const release = await resolveLatestRelease({ emit: message => { try { onEvent({ message }); } catch {} } });
       const record = await withLock(join(root, 'names.lock'), async () => {
-        if ((await setup.list()).some(record => record.name === values.name)) throw new Error(`Deployment ${values.name} already exists. Use status, start or resume.`);
+        if ((await setup.list()).some(record => record.name === values.name || record.id === values.name)) throw new Error(`Deployment ${values.name} already exists. Use status, start or resume.`);
         return setup.create(values, randomUUID(), release);
       });
       return output(await setup.run(record.id, { onEvent }));
     },
     async status(name) { return output(await setup.describe((await find(name)).id)); },
+    async deletionInfo(name) { return deletion.preview((await find(name)).id); },
+    async delete(name, options) { return deletion.run((await find(name)).id, options); },
+    async rename(name, newName, { expectedId } = {}) {
+      newName = validateField(wizardFields({}, 0).find(field => field.id === 'name'), newName);
+      return withLock(join(root, 'names.lock'), async () => {
+        const found = await find(name);
+        if (expectedId && expectedId !== found.id) throw new Error('The deployment changed. Refresh and try again.');
+        return withLock(join(directory(found.id), 'setup.lock'), async () => {
+          const record = await read(found.id);
+          if (record.management?.operation?.status === 'pending') throw new Error('Finish the current operation before renaming this deployment');
+          if ((await setup.list()).some(item => item.id !== found.id && (item.name === newName || item.id === newName))) throw new Error(`Deployment ${newName} already exists`);
+          record.settings.name = newName; record.updatedAt = new Date().toISOString(); await save(record);
+          return output(await setup.describe(found.id, { refresh: false }));
+        });
+      });
+    },
     async act(name, action, options) {
       if (!['start', 'stop', 'restart'].includes(action)) throw new Error(`Unknown action: ${action}`);
       return lifecycle((await find(name)).id, action, options);
     },
     async resume(name, options = {}) {
       const record = await find(name);
+      if (record.management?.operation?.action === 'delete' && record.management.operation.status === 'pending') return deletion.run(record.id, { ...options, resume: true });
       if (record.phase !== 'ready') {
         const snapshot = await readJson(join(directory(record.id), 'terraform/module-source.json'), null);
         await check(targetId(record.target), { environment, sourceRequired: !snapshot, protocol: record.protocol, storage: record.storage });

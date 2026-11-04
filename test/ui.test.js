@@ -8,12 +8,15 @@ const answers = { target: 'docker', name: 'demo', preset: 'tiny', adminPassword:
 
 async function fixture(t, options = {}) {
   const calls = [];
-  const record = { name: 'demo', target: 'docker', phase: 'ready', state: 'ready', topology: { nodes: [], endpoint: 'http://127.0.0.1:8080' } };
+  const record = { id: 'odb-0123456789ab', name: 'demo', target: 'docker', phase: 'ready', state: 'ready', topology: { nodes: [], endpoint: 'http://127.0.0.1:8080' } };
   const manager = {
     list: async () => [record], status: async name => { calls.push(['status', name]); return record; },
     logs: async (name, options) => { calls.push(['logs', name, options]); return 'ready\n'; },
     deploy: async (values, options) => { calls.push(['deploy', values]); options.onEvent({ message: 'Starting nodes' }); return record; },
     act: async (name, action) => { calls.push([action, name]); }, resume: async name => { calls.push(['resume', name]); },
+    deletionInfo: async () => ({ id: record.id, name: record.name, target: record.target, removes: ['local data'], preserves: ['existing S3'], blockedBy: [] }),
+    delete: async (id, options) => { calls.push(['delete', id, options.confirmation]); return { state: 'deleted' }; },
+    rename: async (name, next, options) => { calls.push(['rename', name, next, options.expectedId]); return { ...record, name: next }; },
     ...options.manager,
   };
   const ui = await startUi({ environment: {}, openBrowser: false, port: 0, ...options, manager,
@@ -128,4 +131,39 @@ test('UI command accepts its own flags and rejects a deployment name', () => {
   assert.equal(command, 'ui'); assert.equal(options.port, '7341'); assert.equal(options['no-open'], true);
   assert.throws(() => parseCommand(['ui', 'demo']), /does not take/);
   assert.throws(() => parseCommand(['ui', '--yes']), /not valid/);
+});
+
+test('UI deletion binds confirmation to the current identity and rename updates job history', async t => {
+  const { request, ui, calls } = await fixture(t);
+  const preview = await (await request('/api/clusters/demo/deletion')).json();
+  for (const body of [{ action: 'delete' }, { action: 'delete', id: 'odb-ffffffffffff', confirmation: 'demo' }, { action: 'delete', id: preview.id, confirmation: 'wrong' }]) {
+    assert.equal((await request('/api/clusters/demo/actions', body)).status, 400);
+  }
+  assert.ok(!calls.some(call => call[0] === 'delete'));
+  assert.equal((await request('/api/clusters/demo/actions', { action: 'delete', id: preview.id, confirmation: 'demo' })).status, 202);
+  await ui.settled();
+  assert.deepEqual(calls.at(-1), ['delete', preview.id, 'demo']);
+  assert.equal((await (await request('/api/jobs')).json())[0].resultState, 'deleted');
+  assert.equal((await request('/api/clusters/demo/rename', { newName: 'renamed', id: preview.id })).status, 200);
+  assert.deepEqual(calls.at(-1), ['rename', 'demo', 'renamed', preview.id]);
+  assert.equal((await (await request('/api/jobs')).json())[0].name, 'renamed');
+});
+
+test('UI delete rejects unsupported targets, shared storage and concurrent renames', async t => {
+  let finish;
+  const blocked = new Promise(resolve => { finish = resolve; });
+  const { request, ui, calls } = await fixture(t, { manager: {
+    deletionInfo: async name => {
+      if (name === 'cloud') throw new Error('Deletion is currently available only for Local and Docker deployments');
+      return { id: 'odb-0123456789ab', name, blockedBy: ['dependent'] };
+    }, deploy: async () => { await blocked; },
+  } });
+  assert.equal((await request('/api/clusters/cloud/deletion')).status, 400);
+  assert.equal((await request('/api/clusters/cloud/actions', { action: 'delete', id: 'odb-0123456789ab', confirmation: 'cloud' })).status, 400);
+  assert.equal((await request('/api/clusters/demo/actions', { action: 'delete', id: 'odb-0123456789ab', confirmation: 'demo' })).status, 409);
+  try {
+    await request('/api/deploy', { answers });
+    assert.equal((await request('/api/clusters/demo/rename', { newName: 'renamed' })).status, 409);
+  } finally { finish(); await ui.settled(); }
+  assert.ok(!calls.some(call => ['delete','rename'].includes(call[0])));
 });

@@ -7,6 +7,7 @@ import { assertPortAvailable } from "../../core/ports.js";
 import { localAccessHost, publicUrl, renderCaddyfile, usesHttps } from "../../core/public-access.js";
 import { secretEnvironmentNames } from "../../core/secrets.js";
 import { installationPresets } from "../../core/setup.js";
+import { writePrivateFile } from '../../deployment/files.js';
 
 const CONFIG_PATH = "/etc/objydb/objydb.json";
 const WAL_PATH = "/var/lib/objydb/wal";
@@ -96,7 +97,7 @@ export function renderDockerCompose(plan) {
 }
 
 export function createDockerDriver({ run = runProcess } = {}) {
-  const compose = (paths, args, options = {}) => run("docker", ["compose", "-f", join(paths.root, "compose.json"), ...args], {
+  const compose = (paths, args, { file = join(paths.root, 'compose.json'), ...options } = {}) => run("docker", ["compose", "-f", file, ...args], {
     cwd: paths.root,
     env: options.environment ? { ...process.env, ...options.environment } : process.env,
     ...options,
@@ -200,6 +201,20 @@ export function createDockerDriver({ run = runProcess } = {}) {
     },
     restart: (paths, { environment, services = [] } = {}) => compose(paths, ["up", "-d", "--force-recreate", ...services], { environment }),
     remove: (paths) => compose(paths, ["down", "--remove-orphans"]),
+    checkRemoval,
+    async destroy(paths, { environment } = {}) {
+      const configuration = await checkRemoval(paths, { environment });
+      const file = join(paths.root, 'compose.delete.json');
+      await writePrivateFile(file, JSON.stringify(configuration));
+      await compose(paths, ['down', '--volumes'], { environment, file });
+      const { stdout } = await run('docker', ['ps', '-aq', '--filter', `label=com.docker.compose.project=${configuration.name}`]);
+      if (stdout.trim()) throw new Error('Some deployment containers still exist; deletion can be resumed');
+      const volumes = await run('docker', ['volume', 'ls', '--format', '{{.Name}}']);
+      const names = new Set(volumes.stdout.trim().split(/\s+/));
+      if (Object.keys(configuration.volumes).some(name => names.has(`${configuration.name}_${name}`))) throw new Error('Some deployment volumes still exist; deletion can be resumed');
+      const networks = await run('docker', ['network', 'ls', '--format', '{{.Name}}']);
+      if (networks.stdout.trim().split(/\s+/).includes(`${configuration.name}_objydb`)) throw new Error('The deployment network still exists; deletion can be resumed');
+    },
     async cleanupFailedInstall(paths) {
       try {
         await access(join(paths.root, "compose.json"));
@@ -241,7 +256,7 @@ export function createDockerDriver({ run = runProcess } = {}) {
       const edge = records.find(({ nodeId }) => nodeId === plan.edge?.service);
       if (edge?.state === "running") return records;
       const fatal = ["dead", "exited", "failed", "restarting"].includes(edge?.state);
-      return records.map((record) => nodeIds.has(record.nodeId)
+      return records.map((record) => nodeIds.has(record.nodeId) && record.state === 'running'
         ? { ...record, state: fatal ? "failed" : edge?.state || "starting", detail: `HTTPS edge is ${edge?.state || "starting"}` }
         : record);
     },
@@ -261,6 +276,41 @@ export function createDockerDriver({ run = runProcess } = {}) {
       return `${result.stdout}${result.stderr}`;
     },
   };
+
+  async function checkRemoval(paths) {
+    const plan = await readJson(paths.plan), id = plan.deployment;
+    if (!/^odb-[a-f0-9]{12}$/.test(id || '') || plan.target?.docker?.projectName !== id) throw new Error('Docker project ownership could not be verified');
+    const expected = JSON.parse(renderDockerCompose(plan));
+    if (Object.values(expected.volumes).some(value => Object.keys(value).length)) throw new Error('Deletion cannot remove externally configured volumes');
+    let saved;
+    try { saved = await readJson(join(paths.root, 'compose.json')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (saved && (saved.name !== id || JSON.stringify(saved.volumes) !== JSON.stringify(expected.volumes)
+      || JSON.stringify(saved.networks) !== JSON.stringify(expected.networks)
+      || Object.keys(saved.services).sort().join() !== Object.keys(expected.services).sort().join())) throw new Error('The Docker resource configuration changed. Restore it before deleting this deployment.');
+    const { stdout } = await run('docker', ['ps', '-aq', '--filter', `label=com.docker.compose.project=${id}`]);
+    const containers = stdout.trim().split(/\s+/).filter(Boolean);
+    if (containers.length) {
+      const result = await run('docker', ['inspect', '--type', 'container', '--format', '{{json .Config.Labels}}', ...containers]);
+      for (const line of result.stdout.trim().split('\n').filter(Boolean)) {
+        const labels = JSON.parse(line);
+        if (labels['com.docker.compose.project'] !== id || !expected.services[labels['com.docker.compose.service']]) throw new Error('The Docker project contains an unknown container; deletion was blocked');
+      }
+    }
+    const volumeNames = Object.keys(expected.volumes).map(name => `${id}_${name}`);
+    const listed = await run('docker', ['volume', 'ls', '--format', '{{.Name}}']);
+    const existing = listed.stdout.trim().split(/\s+/).filter(name => volumeNames.includes(name));
+    if (existing.length) {
+      const result = await run('docker', ['volume', 'inspect', '--format', '{{json .Labels}}', ...existing]);
+      if (result.stdout.trim().split('\n').filter(Boolean).some(line => JSON.parse(line)?.['com.docker.compose.project'] !== id)) throw new Error('A deployment volume belongs to another owner; deletion was blocked');
+    }
+    const networks = await run('docker', ['network', 'ls', '--format', '{{.Name}}']);
+    if (networks.stdout.trim().split(/\s+/).includes(`${id}_objydb`)) {
+      const result = await run('docker', ['network', 'inspect', '--format', '{"labels":{{json .Labels}},"containers":{{json .Containers}}}', `${id}_objydb`]);
+      const network = JSON.parse(result.stdout);
+      if (network.labels?.['com.docker.compose.project'] !== id || Object.keys(network.containers || {}).some(container => !containers.some(owned => container.startsWith(owned)))) throw new Error('The deployment network is shared with another container; deletion was blocked');
+    }
+    return expected;
+  }
 }
 
 function localNodePorts(manifest) {

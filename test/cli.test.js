@@ -4,6 +4,7 @@ import { main, parseCommand, logDelta } from '../src/cli.js';
 import { normalizeAnswers, capacity, splitAnswers } from '../src/deployment/catalog.js';
 import { runWizard } from '../src/deployment/wizard.js';
 import { doctor } from '../src/doctor.js';
+import { PassThrough } from 'node:stream';
 
 const base = { target: 'docker', name: 'demo', preset: 'tiny', adminPassword: 'not-a-real-password' };
 function io() {
@@ -86,4 +87,35 @@ test('log following emits added content, including a rotated tail', () => {
   assert.equal(logDelta('a\nb', 'b\nc'), 'c');
   assert.equal(logDelta('a\nb\n', 'b\nc\n'), 'c\n');
   assert.equal(logDelta('same', 'same'), '');
+});
+
+test('delete requires explicit confirmation and forwards the preview identity; rename uses two names', async () => {
+  const streams = io(), calls = [];
+  const preview = { id: 'odb-0123456789ab', name: 'demo', blockedBy: [], removes: ['data'], preserves: ['existing S3'] };
+  const managerFactory = () => ({
+    deletionInfo: async name => { calls.push(['preview', name]); return preview; },
+    delete: async (id, options) => { calls.push(['delete', id, options.confirmation]); return { name: 'demo', state: 'deleted' }; },
+    rename: async (name, next) => { calls.push(['rename', name, next]); return { name: next }; },
+  });
+  assert.equal(await main(['delete', 'demo', '--json'], { ...streams, managerFactory }), 1);
+  assert.ok(!calls.some(call => call[0] === 'delete'));
+  assert.equal(await main(['delete', 'demo', '--yes', '--json'], { ...streams, managerFactory }), 0);
+  assert.deepEqual(calls.at(-1), ['delete', preview.id, 'demo']);
+  assert.equal(await main(['rename', 'demo', 'new-name', '--json'], { ...streams, managerFactory }), 0);
+  assert.deepEqual(calls.at(-1), ['rename', 'demo', 'new-name']);
+  assert.throws(() => parseCommand(['rename', 'a', 'b', 'c']), /Too many/);
+  assert.throws(() => parseCommand(['rename', 'a', 'b', '--yes']), /not valid/);
+});
+
+test('interactive deletion cancels when the typed deployment name differs', async () => {
+  const input = new PassThrough(), output = new PassThrough(); input.isTTY = true; output.isTTY = true;
+  let deleted = false, text = '';
+  output.on('data', data => { text += data.toString(); if (data.toString().includes('to permanently delete')) queueMicrotask(() => input.write('different-name\n')); });
+  const managerFactory = () => ({
+    deletionInfo: async () => ({ id: 'odb-0123456789ab', name: 'demo', blockedBy: [], removes: ['stored data'], preserves: ['existing S3'] }),
+    delete: async () => { deleted = true; },
+  });
+  assert.equal(await main(['delete', 'demo'], { input, output, managerFactory }), 0);
+  assert.equal(deleted, false); assert.match(text, /stored data/); assert.match(text, /Cancelled/);
+  input.destroy(); output.destroy();
 });

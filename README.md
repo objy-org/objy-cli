@@ -56,9 +56,15 @@ objy start production
 objy restart production
 objy logs production --follow
 objy resume production
+objy rename dev my-dev
+objy delete my-dev
 ```
 
 `deploy` creates and starts a cluster. `start` reuses its saved configuration. `stop` retains infrastructure, object storage and data; cloud resources remain billable. `resume` continues interrupted setup or a lifecycle operation.
+
+`rename <name> <new-name>` changes a deployment's name without restarting it. In the UI, open a cluster's **···** menu to rename or delete it.
+
+Deletion is available for **Local and Docker only**. It removes the deployment and its dedicated local data, including automatic S3 storage. Existing S3 buckets and their contents stay intact. Confirm by typing the deployment name, or use `--yes` in scripts. Shared storage dependencies block deletion; interrupted cleanup can be continued with `resume`.
 
 ## What needs installing?
 
@@ -112,4 +118,4 @@ npm run test:smoke
 
 The terminal and browser UI use the same exported `createManager()` API. The UI is one HTML file served by Node.js, with no additional dependencies. Database server code is downloaded separately.
 
-Cloud and VM operations need live qualification before production use. Resizing, upgrades, deletion, importing existing deployments and migrating the server's current `objy` command are outside this first increment.
+Cloud and VM operations need live qualification before production use. Resizing, upgrades, importing existing deployments and migrating the server's current `objy` command are outside this first increment.

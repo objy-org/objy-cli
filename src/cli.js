@@ -15,20 +15,20 @@ const optionTypes = {
 };
 const shorts = { help: 'h', version: 'v', yes: 'y', follow: 'f' };
 const deployOptions = ['config', 'name', 'size', 'region', 'protocol', 'domain', 'shards', 'replicas', 'memory', 'storage', 's3-endpoint', 's3-region', 's3-bucket', 'yes'];
-const allowed = { ui: ['port', 'no-open'], deploy: deployOptions, logs: ['follow', 'node', 'lines'], doctor: ['protocol'], start: [], stop: [], restart: [], resume: [], list: [], status: [], help: [], version: [] };
+const allowed = { ui: ['port', 'no-open'], deploy: deployOptions, delete: ['yes'], rename: [], logs: ['follow', 'node', 'lines'], doctor: ['protocol'], start: [], stop: [], restart: [], resume: [], list: [], status: [], help: [], version: [] };
 
 export function parseCommand(argv) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, strict: true,
     options: Object.fromEntries(Object.entries(optionTypes).map(([name, type]) => [name, { type, ...(shorts[name] ? { short: shorts[name] } : {}) }])) });
   const [command, subject, ...extra] = positionals;
-  if (extra.length) throw new Error('Too many arguments. Run objy --help.');
+  if (extra.length > (command === 'rename' ? 1 : 0)) throw new Error('Too many arguments. Run objy --help.');
   if (command && !allowed[command]) throw new Error(`Unknown command: ${command}. Run objy --help.`);
   for (const name of Object.keys(values)) {
     if (['help', 'version', 'home', 'json'].includes(name)) continue;
     if (!allowed[command]?.includes(name)) throw new Error(`--${name} is not valid for ${command || 'the menu'}`);
   }
   if (subject && ['list', 'help', 'version', 'ui'].includes(command)) throw new Error(`${command} does not take a deployment name`);
-  return { command, subject, options: values };
+  return { command, subject, newName: command === 'rename' ? extra[0] : undefined, options: values };
 }
 
 export async function main(argv = process.argv.slice(2), { input = process.stdin, output = process.stdout, error = process.stderr, environment = process.env, managerFactory = createManager, doctorImpl = doctor } = {}) {
@@ -41,7 +41,7 @@ export async function main(argv = process.argv.slice(2), { input = process.stdin
     throw failure;
   }
   async function execute() {
-    let { command, subject, options } = parsed;
+    let { command, subject, newName, options } = parsed;
     if (options.version || command === 'version') {
       const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url)));
       output.write(options.json ? JSON.stringify({ version: pkg.version }) + '\n' : `${pkg.version}\n`); return 0;
@@ -57,6 +57,10 @@ export async function main(argv = process.argv.slice(2), { input = process.stdin
       return 0;
     }
     const interactive = input.isTTY && output.isTTY && !options.json;
+    const question = async prompt => {
+      const terminal = createInterface({ input, output });
+      try { return await terminal.question(prompt); } finally { terminal.close(); }
+    };
     const ask = async (prompt, choices) => {
       if (!interactive) throw new Error('Specify a deployment name. Run objy list --json to see saved deployments.');
       const terminal = createInterface({ input, output });
@@ -96,6 +100,8 @@ export async function main(argv = process.argv.slice(2), { input = process.stdin
           { value: 'start', label: 'Start' }, { value: 'stop', label: 'Stop' }, { value: 'restart', label: 'Restart' },
         ]),
         { value: 'logs', label: 'View logs' },
+        ...(!record.management?.operation || record.management.operation.status !== 'pending' ? [{ value: 'rename', label: 'Rename deployment' }] : []),
+        ...(['local', 'docker'].includes(record.target) ? [{ value: 'delete', label: 'Delete deployment and local data' }] : []),
       ]);
     }
     const emit = event => { if (!options.json) error.write(`  ${event.message}\n`); };
@@ -130,6 +136,20 @@ export async function main(argv = process.argv.slice(2), { input = process.stdin
     else {
       subject ||= await pickDeployment();
       if (command === 'status') result = await manager.status(subject);
+      else if (command === 'rename') {
+        if (!newName && interactive) newName = await question('New deployment name: ');
+        if (!newName) throw new Error('Specify the new name: objy rename <name> <new-name>');
+        result = await manager.rename(subject, newName);
+      } else if (command === 'delete') {
+        const preview = await manager.deletionInfo(subject);
+        if (preview.blockedBy.length) throw new Error(`Storage is used by ${preview.blockedBy.join(', ')}. Delete those deployments first or move their storage.`);
+        if (!options.yes) {
+          if (!interactive) throw new Error('Noninteractive deletion requires --yes. This permanently deletes the deployment and its dedicated local data.');
+          output.write(`\nDelete ${preview.name}\n\nRemoves:\n${preview.removes.map(item => `  • ${item}\n`).join('')}\nKeeps:\n${preview.preserves.map(item => `  • ${item}\n`).join('')}`);
+          if (await question(`\nType ${preview.name} to permanently delete it: `) !== preview.name) { output.write('Cancelled.\n'); return 0; }
+        }
+        result = await manager.delete(preview.id, { confirmation: preview.name, onEvent: emit });
+      }
       else if (command === 'resume') result = await manager.resume(subject, { onEvent: emit });
       else if (['start', 'stop', 'restart'].includes(command)) result = await manager.act(subject, command, { onEvent: emit });
       else if (command === 'logs') {
@@ -197,6 +217,8 @@ objy — deploy and manage your clusters
   objy restart [name]          Stop, then start nodes
   objy logs [name] [-f]        Read or follow logs
   objy resume [name]           Continue interrupted work
+  objy delete [name]           Delete a Local or Docker deployment and local data
+  objy rename <name> <new-name> Rename a deployment
   objy doctor [target]         Check dependencies
   objy ui                      Open the local browser UI
 
@@ -210,6 +232,7 @@ Deploy: --name, --size, --region, --protocol http|https, --domain
 Custom: --shards, --replicas, --memory <MiB>
 Storage: --storage auto|external-s3, --s3-endpoint, --s3-region, --s3-bucket
 Advanced: --config <json>, --yes
+Delete: --yes (skip confirmation for scripts)
 Logs: --node <id>, --lines <count>, --follow
 UI: --port <number>, --no-open
 Global: --home <directory>, --json, --help, --version

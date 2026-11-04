@@ -15,12 +15,12 @@ export async function doctor(target, { environment = process.env, run = runProce
     catch { checks.push({ name, ok: false, detail: `${name} is unavailable`, install }); }
   }
   if (target === 'node-process') {
-    if ((!storage || ['auto', 'local-s3'].includes(storage)) && action !== 'stop') {
+    if ((!storage || ['auto', 'local-s3'].includes(storage)) && !['stop', 'delete'].includes(action)) {
       try { const release = seaweedRelease(); checks.push({ name: 'Automatic local storage', ok: true, detail: `SeaweedFS ${release.version} will be downloaded when needed` }); }
       catch (error) { checks.push({ name: 'Automatic local storage', ok: false, detail: error.message }); }
     }
     if (action === 'deploy') await command('npm', process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--version'], 'https://nodejs.org/en/download');
-    if (protocol === 'https' && action !== 'stop') await command('Caddy', 'caddy', ['version'], 'https://caddyserver.com/docs/install');
+    if (protocol === 'https' && !['stop', 'delete'].includes(action)) await command('Caddy', 'caddy', ['version'], 'https://caddyserver.com/docs/install');
   }
   if (target === 'docker') {
     await command('Docker Engine', 'docker', ['info', '--format', '{{.ServerVersion}}'], 'https://docs.docker.com/get-started/get-docker/');
