@@ -1,6 +1,6 @@
 # objy
 
-One CLI for your Objy clusters. Deploy locally, with Docker, onto existing VMs, or to Hetzner using Terraform.
+One CLI for your OBJY DB clusters. Deploy locally, with Docker, onto existing VMs, or to Hetzner using Terraform.
 
 ```sh
 npm install --global @objy/cli
@@ -84,7 +84,7 @@ Terraform remains external. Missing tools produce an installation link before de
 
 ## Server releases
 
-New deployments automatically use the latest published [Objy server release](https://github.com/objy-org/objy/releases). Stable releases are preferred; until one exists, the newest prerelease is used. No version selection or manifest is needed.
+New deployments automatically use the latest published [OBJY DB server release](https://github.com/objy-org/objy/releases). Stable releases are preferred; until one exists, the newest prerelease is used. No version selection or manifest is needed.
 
 The CLI downloads the server separately, saves its exact commit and checksum, and reuses that version for restarts and resumes. Existing clusters never upgrade implicitly. The server and database library are not CLI dependencies.
 
