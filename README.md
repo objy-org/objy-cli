@@ -3,7 +3,7 @@
 One CLI for your Objy clusters. Deploy locally, with Docker, onto existing VMs, or to Hetzner using Terraform.
 
 ```sh
-npm install --global @objy/cli@alpha
+npm install --global @objy/cli
 objy --help
 ```
 
